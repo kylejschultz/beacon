@@ -4,10 +4,17 @@ compatibility_date = "2025-05-07"
 compatibility_flags = ["nodejs_compat"]
 
 routes = [
-  { pattern = "beacon.kjschultz.com/*", custom_domain = true }
+  { pattern = "beacon.kjschultz.com", custom_domain = true }
 ]
 
 [[d1_databases]]
 binding = "ANALYTICS_DB"
 database_name = "beacon-analytics"
-# database_id = ""  # Run: wrangler d1 create beacon-analytics, then paste the id here
+database_id = "be31f52f-1b4a-4d36-9325-3a06e11d62f2"
+
+[triggers]
+crons = ["0 7 * * *"]
+
+[observability.logs]
+enabled = true
+invocation_logs = true
