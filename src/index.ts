@@ -47,6 +47,10 @@ export default {
       return handleHistory(request, env);
     }
 
+    if (request.method === "GET" && url.pathname === "/summary") {
+      return handleSummary(request, env);
+    }
+
     if (request.method === "POST" && url.pathname === "/auth") {
       return handleAuth(request, env);
     }
@@ -110,14 +114,14 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   }
 
   await env.ANALYTICS_DB.prepare(
-    `INSERT INTO installs (project, install_id, version, arch, last_seen)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO installs (project, install_id, version, arch, last_seen, first_seen)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT (project, install_id) DO UPDATE SET
        version   = excluded.version,
        arch      = excluded.arch,
        last_seen = excluded.last_seen`
   )
-    .bind(project, install_id, version, arch, timestamp)
+    .bind(project, install_id, version, arch, timestamp, timestamp)
     .run();
 
   return new Response(JSON.stringify({ ok: true }), {
@@ -215,6 +219,58 @@ async function handleHistory(request: Request, env: Env): Promise<Response> {
   });
 }
 
+async function handleSummary(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+
+  if (!checkSecret(request, url, env)) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const filterProject = url.searchParams.get("project");
+  const now = Date.now();
+  const activeStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const staleStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const staleEnd = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  let activeResult: { count: number } | null;
+  let totalResult: { count: number } | null;
+  let staleResult: { count: number } | null;
+
+  if (filterProject) {
+    activeResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?`
+    ).bind(activeStart, filterProject).first<{ count: number }>();
+    totalResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE project = ?`
+    ).bind(filterProject).first<{ count: number }>();
+    staleResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ? AND project = ?`
+    ).bind(staleStart, staleEnd, filterProject).first<{ count: number }>();
+  } else {
+    activeResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?`
+    ).bind(activeStart).first<{ count: number }>();
+    totalResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs`
+    ).first<{ count: number }>();
+    staleResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ?`
+    ).bind(staleStart, staleEnd).first<{ count: number }>();
+  }
+
+  return new Response(
+    JSON.stringify({
+      active: activeResult?.count ?? 0,
+      total: totalResult?.count ?? 0,
+      stale: staleResult?.count ?? 0,
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
+}
+
 async function handleAuth(request: Request, env: Env): Promise<Response> {
   let body: { password?: string };
   try {
@@ -305,7 +361,8 @@ function dashboardHtml(): string {
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #111; color: #e5e5e5; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; }
+    html, body { height: 100%; overflow: hidden; }
+    body { background: #111; color: #e5e5e5; font-family: system-ui, -apple-system, sans-serif; display: flex; flex-direction: column; }
 
     /* Login overlay */
     #login-overlay {
@@ -334,11 +391,11 @@ function dashboardHtml(): string {
     #login-error.hidden { display: none; }
 
     /* Dashboard layout */
-    #dashboard { display: none; }
-    #dashboard.visible { display: block; }
+    #dashboard { display: none; flex-direction: column; flex: 1; min-height: 0; }
+    #dashboard.visible { display: flex; }
     header {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 1.25rem 1.5rem; border-bottom: 1px solid #222;
+      padding: 1.25rem 1.5rem; border-bottom: 1px solid #222; flex-shrink: 0;
     }
     header h1 { font-size: 1.1rem; font-weight: 700; color: #22c55e; letter-spacing: 0.05em; }
     .header-controls { display: flex; gap: 0.75rem; align-items: center; }
@@ -349,18 +406,28 @@ function dashboardHtml(): string {
     }
     select:focus { border-color: #22c55e; }
 
-    main { padding: 1.5rem; max-width: 960px; margin: 0 auto; }
-
-    /* Hero */
-    .hero {
-      text-align: center; padding: 2.5rem 1rem; margin-bottom: 1.25rem;
-      background: #1a1a1a; border-radius: 10px; border: 1px solid #2e2e2e;
+    main {
+      flex: 1; min-height: 0; display: flex; flex-direction: column;
+      padding: 1.25rem 1.5rem 1.5rem; max-width: 960px; width: 100%; margin: 0 auto;
     }
-    .hero-number { font-size: 4.5rem; font-weight: 700; color: #22c55e; line-height: 1; }
-    .hero-label { font-size: 0.9rem; color: #888; margin-top: 0.5rem; }
 
-    /* Stat cards */
-    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
+    /* Summary stat cards */
+    .stat-cards {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.25rem;
+      margin-bottom: 1.25rem; flex-shrink: 0;
+    }
+    @media (max-width: 600px) { .stat-cards { grid-template-columns: 1fr; } }
+    .stat-card {
+      background: #1a1a1a; border: 1px solid #2e2e2e;
+      border-top: 3px solid var(--accent, #e5e5e5);
+      border-radius: 10px; padding: 1.1rem 1.25rem;
+    }
+    .stat-card-value { font-size: 2.5rem; font-weight: 700; color: var(--accent, #e5e5e5); line-height: 1; }
+    .stat-card-label { font-size: 0.85rem; font-weight: 600; color: #ccc; margin-top: 0.4rem; }
+    .stat-card-sub { font-size: 0.75rem; color: #666; margin-top: 0.2rem; }
+
+    /* Distribution cards */
+    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; flex-shrink: 0; }
     @media (max-width: 540px) { .cards { grid-template-columns: 1fr; } }
     .card {
       background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 10px; padding: 1.25rem;
@@ -375,10 +442,14 @@ function dashboardHtml(): string {
     .dist-pct { width: 36px; text-align: right; color: #888; flex-shrink: 0; }
 
     /* Chart card */
-    .chart-card { background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 10px; padding: 1.25rem; }
-    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+    .chart-card {
+      background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 10px; padding: 1.25rem;
+      flex: 1; min-height: 0; display: flex; flex-direction: column;
+    }
+    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-shrink: 0; }
     .chart-header h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; color: #555; }
-    canvas { display: block; width: 100% !important; }
+    .chart-wrap { flex: 1; min-height: 0; position: relative; }
+    canvas { display: block; }
 
     /* Placeholder */
     .empty { color: #555; font-size: 0.85rem; }
@@ -408,9 +479,22 @@ function dashboardHtml(): string {
   </header>
 
   <main>
-    <div class="hero">
-      <div class="hero-number" id="total-installs">-</div>
-      <div class="hero-label">Active installs &mdash; last 30 days</div>
+    <div class="stat-cards">
+      <div class="stat-card" style="--accent:#22c55e">
+        <div class="stat-card-value" id="stat-active">-</div>
+        <div class="stat-card-label">Active Installs</div>
+        <div class="stat-card-sub">Last 30 days</div>
+      </div>
+      <div class="stat-card" style="--accent:#e5e5e5">
+        <div class="stat-card-value" id="stat-total">-</div>
+        <div class="stat-card-label">Total All-Time</div>
+        <div class="stat-card-sub">Unique installs</div>
+      </div>
+      <div class="stat-card" style="--accent:#f59e0b">
+        <div class="stat-card-value" id="stat-stale">-</div>
+        <div class="stat-card-label">Stale</div>
+        <div class="stat-card-sub">No ping in 7+ days</div>
+      </div>
     </div>
 
     <div class="cards">
@@ -434,7 +518,9 @@ function dashboardHtml(): string {
           <option value="90">90 days</option>
         </select>
       </div>
-      <canvas id="history-chart" height="220"></canvas>
+      <div class="chart-wrap">
+        <canvas id="history-chart"></canvas>
+      </div>
     </div>
   </main>
 </div>
@@ -493,7 +579,6 @@ function dashboardHtml(): string {
         return;
       }
       Promise.all([responses[0].json(), responses[1].json()]).then(function (data) {
-        // Aggregate individual install rows into per-project summaries
         var rawRows = data[0].installs || [];
         var projectMap = {};
         rawRows.forEach(function (row) {
@@ -508,7 +593,6 @@ function dashboardHtml(): string {
         });
         allHistory = data[1].history || {};
 
-        // Populate project dropdown
         var sel = $('project-select');
         while (sel.options.length > 1) sel.remove(1);
         allInstalls.forEach(function (inst) {
@@ -532,12 +616,21 @@ function dashboardHtml(): string {
   // ---- Rendering ----
 
   function renderDashboard(project) {
+    var summaryUrl = '/summary?key=' + encodeURIComponent(token);
+    if (project) summaryUrl += '&project=' + encodeURIComponent(project);
+    fetch(summaryUrl).then(function (res) {
+      return res.json();
+    }).then(function (data) {
+      $('stat-active').textContent = (data.active || 0).toLocaleString();
+      $('stat-total').textContent = (data.total || 0).toLocaleString();
+      $('stat-stale').textContent = (data.stale || 0).toLocaleString();
+    }).catch(function () {});
+
     var filtered = project
       ? allInstalls.filter(function (i) { return i.project === project; })
       : allInstalls;
 
     var total = filtered.reduce(function (s, i) { return s + i.count; }, 0);
-    $('total-installs').textContent = total.toLocaleString();
 
     var versions = {};
     var archs = {};
@@ -592,8 +685,7 @@ function dashboardHtml(): string {
   function renderChart(project) {
     var days = parseInt($('time-window').value, 10);
     var now = new Date();
-    // Shift to Pacific for date labels
-    var pacificOffset = -7 * 60; // minutes
+    var pacificOffset = -7 * 60;
     var dates = [];
     for (var i = days - 1; i >= 0; i--) {
       var d = new Date(now.getTime() - i * 86400000 + pacificOffset * 60000);
@@ -617,7 +709,12 @@ function dashboardHtml(): string {
       return countsByDate[d] !== undefined ? countsByDate[d] : null;
     });
 
-    var ctx = $('history-chart').getContext('2d');
+    var wrap = document.querySelector('.chart-wrap');
+    var canvas = $('history-chart');
+    canvas.width = wrap.offsetWidth;
+    canvas.height = wrap.offsetHeight;
+
+    var ctx = canvas.getContext('2d');
     if (histChart) histChart.destroy();
     histChart = new Chart(ctx, {
       type: 'line',
@@ -636,7 +733,7 @@ function dashboardHtml(): string {
       },
       options: {
         responsive: true,
-        maintainAspectRatio: true,
+        maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
           tooltip: {

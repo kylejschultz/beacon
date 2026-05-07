@@ -16,3 +16,6 @@ CREATE TABLE IF NOT EXISTS install_history (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_history_project_date
   ON install_history (project, snapshot_date);
+
+ALTER TABLE installs ADD COLUMN first_seen TEXT;
+UPDATE installs SET first_seen = last_seen WHERE first_seen IS NULL;
