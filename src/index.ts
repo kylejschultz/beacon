@@ -98,12 +98,15 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     return new Response("Invalid JSON", { status: 400, headers: CORS_HEADERS });
   }
 
-  const { project, install_id, version, arch, timestamp } = body as {
+  const { project, install_id, version, arch, timestamp, channel, container_count, os } = body as {
     project?: string;
     install_id?: string;
     version?: string;
     arch?: string;
     timestamp?: string;
+    channel?: string;
+    container_count?: number;
+    os?: string;
   };
 
   if (!project || !install_id || !version || !arch || !timestamp) {
@@ -114,14 +117,18 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   }
 
   await env.ANALYTICS_DB.prepare(
-    `INSERT INTO installs (project, install_id, version, arch, last_seen, first_seen)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO installs (project, install_id, version, arch, last_seen, first_seen, channel, container_count, os)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (project, install_id) DO UPDATE SET
-       version   = excluded.version,
-       arch      = excluded.arch,
-       last_seen = excluded.last_seen`
+       version         = excluded.version,
+       arch            = excluded.arch,
+       last_seen       = excluded.last_seen,
+       channel         = excluded.channel,
+       container_count = excluded.container_count,
+       os              = excluded.os`
   )
-    .bind(project, install_id, version, arch, timestamp, timestamp)
+    .bind(project, install_id, version, arch, timestamp, timestamp,
+          channel ?? null, container_count ?? null, os ?? null)
     .run();
 
   return new Response(JSON.stringify({ ok: true }), {
