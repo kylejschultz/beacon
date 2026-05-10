@@ -314,28 +314,45 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
 
   const filterProject = url.searchParams.get("project");
 
-  let rows: { project: string; version: string; arch: string; last_seen: string }[];
+  type InstallRow = {
+    project: string;
+    install_id: string;
+    version: string;
+    arch: string;
+    last_seen: string;
+    channel: string | null;
+    container_count: number | null;
+    os: string | null;
+  };
+
+  let rows: InstallRow[];
 
   if (filterProject) {
     const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, version, arch, last_seen FROM installs WHERE project = ? ORDER BY project, last_seen DESC`
+      `SELECT project, install_id, version, arch, last_seen, channel, container_count, os
+       FROM installs WHERE project = ? ORDER BY project, last_seen DESC`
     )
       .bind(filterProject)
-      .all<{ project: string; version: string; arch: string; last_seen: string }>();
+      .all<InstallRow>();
     rows = result.results;
   } else {
     const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, version, arch, last_seen FROM installs ORDER BY project, last_seen DESC`
+      `SELECT project, install_id, version, arch, last_seen, channel, container_count, os
+       FROM installs ORDER BY project, last_seen DESC`
     )
-      .all<{ project: string; version: string; arch: string; last_seen: string }>();
+      .all<InstallRow>();
     rows = result.results;
   }
 
   const installs = rows.map((row) => ({
     project: row.project,
+    install_id: row.install_id,
     version: row.version,
     arch: row.arch,
     last_seen: toPacificISOString(row.last_seen),
+    channel: row.channel,
+    container_count: row.container_count,
+    os: row.os,
   }));
 
   return new Response(JSON.stringify({ installs }), {
@@ -364,169 +381,273 @@ function dashboardHtml(): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Beacon Dashboard</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <title>Beacon</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"><\/script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; overflow: hidden; }
-    body { background: #111; color: #e5e5e5; font-family: system-ui, -apple-system, sans-serif; display: flex; flex-direction: column; }
+    body { background: #0d1117; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; }
 
-    /* Login overlay */
-    #login-overlay {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.75);
-      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-      display: flex; align-items: center; justify-content: center; z-index: 100;
+    /* ---- Login ---- */
+    #login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .login-card { background: #161b22; border: 1px solid #21293a; border-radius: 12px; padding: 2rem; width: 340px; max-width: 90vw; }
+    .login-logo { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.75rem; }
+    .logo-dot { width: 8px; height: 8px; background: #22d3ee; border-radius: 50%; flex-shrink: 0; }
+    .logo-text { font-size: 1rem; font-weight: 700; color: #22d3ee; letter-spacing: 0.08em; }
+    .login-card input[type="password"] {
+      width: 100%; padding: 0.65rem 0.85rem; background: #0d1117; border: 1px solid #21293a;
+      border-radius: 6px; color: #e2e8f0; font-size: 0.95rem; outline: none; margin-bottom: 0.75rem;
     }
-    #login-overlay.hidden { display: none; }
-    #login-modal {
-      background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 12px;
-      padding: 2rem; width: 340px; max-width: 90vw;
+    .login-card input[type="password"]:focus { border-color: #22d3ee; }
+    .login-card button[type="submit"] {
+      width: 100%; padding: 0.65rem; background: #22d3ee; border: none; border-radius: 6px;
+      color: #0d1117; font-size: 0.95rem; font-weight: 600; cursor: pointer;
     }
-    #login-modal h2 { font-size: 1.25rem; font-weight: 600; margin-bottom: 1.5rem; color: #fff; }
-    #login-modal input[type="password"] {
-      width: 100%; padding: 0.65rem 0.85rem; background: #242424; border: 1px solid #333;
-      border-radius: 6px; color: #e5e5e5; font-size: 0.95rem; outline: none;
-      margin-bottom: 0.75rem;
-    }
-    #login-modal input[type="password"]:focus { border-color: #22c55e; }
-    #login-modal button {
-      width: 100%; padding: 0.65rem; background: #22c55e; border: none; border-radius: 6px;
-      color: #000; font-size: 0.95rem; font-weight: 600; cursor: pointer;
-    }
-    #login-modal button:hover { background: #16a34a; }
-    #login-error { color: #ef4444; font-size: 0.85rem; margin-top: 0.6rem; }
-    #login-error.hidden { display: none; }
+    .login-card button[type="submit"]:hover { opacity: 0.9; }
+    #login-error { color: #f87171; font-size: 0.85rem; margin-top: 0.6rem; display: none; }
 
-    /* Dashboard layout */
-    #dashboard { display: none; flex-direction: column; flex: 1; min-height: 0; }
-    #dashboard.visible { display: flex; }
+    /* ---- Header ---- */
     header {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 1.25rem 1.5rem; border-bottom: 1px solid #222; flex-shrink: 0;
+      padding: 1rem 1.5rem; border-bottom: 1px solid #21293a;
     }
-    header h1 { font-size: 1.1rem; font-weight: 700; color: #22c55e; letter-spacing: 0.05em; }
-    .header-controls { display: flex; gap: 0.75rem; align-items: center; }
-    select {
-      background: #1a1a1a; border: 1px solid #2e2e2e; color: #e5e5e5;
-      padding: 0.45rem 0.75rem; border-radius: 6px; font-size: 0.875rem; cursor: pointer;
-      outline: none;
+    .header-logo { display: flex; align-items: center; gap: 0.5rem; }
+    .header-right { display: flex; align-items: center; gap: 0.75rem; }
+    .pill-btn {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.2);
+      color: #22d3ee; border-radius: 20px; padding: 0.35rem 0.8rem;
+      font-size: 0.85rem; cursor: pointer;
     }
-    select:focus { border-color: #22c55e; }
+    .pill-btn:hover { background: rgba(34,211,238,0.13); }
+    .pill-badge {
+      display: inline-flex; align-items: center;
+      background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.2);
+      color: #22d3ee; border-radius: 20px; padding: 0.35rem 0.8rem; font-size: 0.85rem;
+    }
 
-    main {
-      flex: 1; min-height: 0; display: flex; flex-direction: column;
-      padding: 1.25rem 1.5rem 1.5rem; max-width: 960px; width: 100%; margin: 0 auto;
-    }
+    /* ---- Main ---- */
+    main { max-width: 960px; width: 100%; margin: 0 auto; padding: 1.5rem; }
 
-    /* Summary stat cards */
-    .stat-cards {
-      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.25rem;
-      margin-bottom: 1.25rem; flex-shrink: 0;
-    }
+    /* ---- Stat cards ---- */
+    .stat-cards { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
     @media (max-width: 600px) { .stat-cards { grid-template-columns: 1fr; } }
     .stat-card {
-      background: #1a1a1a; border: 1px solid #2e2e2e;
-      border-top: 3px solid var(--accent, #e5e5e5);
-      border-radius: 10px; padding: 1.1rem 1.25rem;
+      background: #161b22; border: 1px solid #21293a; border-radius: 8px;
+      padding: 1.25rem; cursor: pointer; transition: background 0.15s, border-color 0.15s;
     }
-    .stat-card-value { font-size: 2.5rem; font-weight: 700; color: var(--accent, #e5e5e5); line-height: 1; }
-    .stat-card-label { font-size: 0.85rem; font-weight: 600; color: #ccc; margin-top: 0.4rem; }
-    .stat-card-sub { font-size: 0.75rem; color: #666; margin-top: 0.2rem; }
+    .stat-card:hover { background: rgba(34,211,238,0.03); }
+    .stat-card--active { background: rgba(34,211,238,0.05); border-color: #22d3ee; }
+    .stat-value { font-size: 2rem; font-weight: 700; color: #e2e8f0; line-height: 1; margin-bottom: 0.4rem; }
+    .stat-value--stale { color: #f87171; }
+    .stat-label { font-size: 0.82rem; color: #64748b; }
 
-    /* Distribution cards */
-    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; flex-shrink: 0; }
-    @media (max-width: 540px) { .cards { grid-template-columns: 1fr; } }
-    .card {
-      background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 10px; padding: 1.25rem;
+    /* ---- Chart ---- */
+    .chart-section {
+      background: #161b22; border: 1px solid #21293a; border-radius: 8px;
+      padding: 1.25rem; margin-bottom: 1.5rem;
     }
-    .card h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; color: #555; margin-bottom: 1rem; }
+    .chart-section canvas { display: block; width: 100% !important; height: 140px !important; }
 
-    /* Distribution rows */
-    .dist-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem; font-size: 0.85rem; }
-    .dist-label { width: 90px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #ccc; flex-shrink: 0; }
-    .dist-bar-wrap { flex: 1; background: #242424; border-radius: 3px; height: 6px; overflow: hidden; }
-    .dist-bar { height: 100%; background: #22c55e; border-radius: 3px; transition: width 0.3s ease; }
-    .dist-pct { width: 36px; text-align: right; color: #888; flex-shrink: 0; }
+    /* ---- Breakdowns ---- */
+    .breakdown-section { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 700px) { .breakdown-section { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 460px) { .breakdown-section { grid-template-columns: 1fr; } }
+    .breakdown-card { background: #161b22; border: 1px solid #21293a; border-radius: 8px; padding: 1rem; }
+    .breakdown-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 0.75rem; }
+    .breakdown-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .breakdown-label { min-width: 52px; font-size: 0.8rem; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+    .breakdown-bar-track { flex: 1; height: 3px; background: #21293a; border-radius: 2px; overflow: hidden; }
+    .breakdown-bar { height: 100%; background: #22d3ee; border-radius: 2px; transition: width 0.3s ease; }
+    .breakdown-pct { font-size: 0.75rem; color: #64748b; width: 32px; text-align: right; flex-shrink: 0; }
+    .empty-text { font-size: 0.8rem; color: #64748b; }
 
-    /* Chart card */
-    .chart-card {
-      background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 10px; padding: 1.25rem;
-      flex: 1; min-height: 0; display: flex; flex-direction: column;
+    /* ---- Details section ---- */
+    .details-section { background: #161b22; border: 1px solid #21293a; border-radius: 8px; }
+    .details-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1rem 1.25rem; cursor: pointer; user-select: none;
+      font-size: 0.9rem; color: #e2e8f0; border-radius: 8px;
     }
-    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-shrink: 0; }
-    .chart-header h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; color: #555; }
-    .chart-wrap { flex: 1; min-height: 0; position: relative; }
-    canvas { display: block; }
+    .details-header:hover { background: rgba(255,255,255,0.02); }
+    #details-body { padding: 0 1.25rem 1.25rem; }
 
-    /* Placeholder */
-    .empty { color: #555; font-size: 0.85rem; }
+    /* ---- Filter bar ---- */
+    .filter-bar { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .card-filter-pill-wrap { margin-bottom: 0.75rem; }
+    .filter-pill {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.2);
+      color: #22d3ee; border-radius: 20px; padding: 0.25rem 0.65rem; font-size: 0.82rem;
+    }
+    .pill-dismiss { background: none; border: none; color: #22d3ee; cursor: pointer; padding: 0; font-size: 0.8rem; line-height: 1; opacity: 0.7; display: inline-flex; align-items: center; }
+    .pill-dismiss:hover { opacity: 1; }
+
+    /* ---- Custom dropdowns ---- */
+    .dropdown-wrap { position: relative; }
+    .dropdown-btn {
+      display: inline-flex; align-items: center; gap: 0.35rem; background: transparent;
+      border: 1px solid #21293a; color: #64748b; border-radius: 20px;
+      padding: 0.3rem 0.7rem; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
+    }
+    .dropdown-btn:hover { border-color: #475569; }
+    .dropdown-btn--active { border-color: #22d3ee; color: #22d3ee; background: rgba(34,211,238,0.06); }
+    .dropdown-menu {
+      position: absolute; top: calc(100% + 4px); left: 0;
+      background: #1c2230; border: 1px solid #21293a; border-radius: 8px;
+      padding: 0.35rem 0; min-width: 120px; z-index: 50;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .dropdown-menu.hidden { display: none; }
+    .dropdown-item { padding: 0.45rem 0.85rem; font-size: 0.85rem; color: #e2e8f0; cursor: pointer; }
+    .dropdown-item:hover { background: rgba(34,211,238,0.06); color: #22d3ee; }
+    .dropdown-item.active { color: #22d3ee; }
+
+    /* ---- Install rows ---- */
+    #install-rows { display: flex; flex-direction: column; }
+    .install-row { border-top: 1px solid #21293a; cursor: pointer; }
+    .install-row:first-child { border-top: none; }
+    .install-row-main { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0; }
+    .install-row:hover .install-row-main { background: rgba(255,255,255,0.02); }
+    .install-row--expanded .install-row-main { background: rgba(34,211,238,0.03); }
+    .install-id { font-family: monospace; font-size: 0.85rem; color: #22d3ee; flex-shrink: 0; width: 84px; }
+    .install-chips { display: flex; gap: 0.35rem; flex-wrap: wrap; flex: 1; }
+    .chip { display: inline-flex; align-items: center; font-size: 0.72rem; padding: 0.15rem 0.45rem; border-radius: 4px; font-weight: 500; }
+    .chip--indigo { background: rgba(99,102,241,0.15); color: #a5b4fc; }
+    .chip--purple { background: rgba(168,85,247,0.15); color: #d8b4fe; }
+    .chip--cyan { background: rgba(34,211,238,0.12); color: #67e8f9; }
+    .chip--amber { background: rgba(251,191,36,0.12); color: #fde68a; }
+    .chip--neutral { background: rgba(100,116,139,0.15); color: #94a3b8; }
+    .install-right { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
+    .install-version { font-size: 0.82rem; color: #e2e8f0; }
+    .install-time { font-size: 0.75rem; color: #64748b; }
+    .install-detail-panel { background: #1c2230; border-top: 1px solid #21293a; padding: 0.85rem 0; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem 1rem; }
+    @media (max-width: 640px) { .detail-grid { grid-template-columns: 1fr 1fr; } }
+    .detail-field { display: flex; flex-direction: column; gap: 0.2rem; }
+    .detail-key { font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
+    .detail-val { font-size: 0.82rem; color: #e2e8f0; word-break: break-all; }
+    .detail-mono { font-family: monospace; font-size: 0.76rem; }
+    .empty-row { font-size: 0.85rem; color: #64748b; padding: 1rem 0; }
   </style>
 </head>
 <body>
 
-<div id="login-overlay">
-  <div id="login-modal">
-    <h2>Beacon Dashboard</h2>
+<div id="login-page">
+  <div class="login-card">
+    <div class="login-logo">
+      <span class="logo-dot"></span>
+      <span class="logo-text">beacon</span>
+    </div>
     <form id="login-form" autocomplete="off">
       <input type="password" id="password-input" placeholder="Password" autocomplete="current-password">
       <button type="submit">Sign in</button>
-      <p id="login-error" class="hidden">Invalid password. Try again.</p>
+      <p id="login-error">Invalid password. Try again.</p>
     </form>
   </div>
 </div>
 
-<div id="dashboard">
+<div id="dashboard-page" style="display:none">
   <header>
-    <h1>beacon</h1>
-    <div class="header-controls">
-      <select id="project-select">
-        <option value="">All Projects</option>
-      </select>
+    <div class="header-logo">
+      <span class="logo-dot"></span>
+      <span class="logo-text">beacon</span>
+    </div>
+    <div class="header-right">
+      <div class="dropdown-wrap">
+        <button class="pill-btn" id="window-btn">
+          <span id="window-btn-label">1d</span>
+          <i class="ti ti-chevron-down"></i>
+        </button>
+        <div class="dropdown-menu hidden" id="window-menu">
+          <div class="dropdown-item" data-value="1">1d</div>
+          <div class="dropdown-item" data-value="7">7d</div>
+          <div class="dropdown-item" data-value="14">14d</div>
+          <div class="dropdown-item" data-value="30">30d</div>
+          <div class="dropdown-item" data-value="90">90d</div>
+        </div>
+      </div>
+      <span class="pill-badge">nestview</span>
     </div>
   </header>
 
   <main>
     <div class="stat-cards">
-      <div class="stat-card" style="--accent:#22c55e">
-        <div class="stat-card-value" id="stat-active">-</div>
-        <div class="stat-card-label">Active Installs</div>
-        <div class="stat-card-sub">Last 30 days</div>
+      <div class="stat-card" data-filter="active">
+        <div class="stat-value" id="stat-active">-</div>
+        <div class="stat-label">Active installs</div>
       </div>
-      <div class="stat-card" style="--accent:#e5e5e5">
-        <div class="stat-card-value" id="stat-total">-</div>
-        <div class="stat-card-label">Total All-Time</div>
-        <div class="stat-card-sub">Unique installs</div>
+      <div class="stat-card" data-filter="all">
+        <div class="stat-value" id="stat-total">-</div>
+        <div class="stat-label">All-time installs</div>
       </div>
-      <div class="stat-card" style="--accent:#f59e0b">
-        <div class="stat-card-value" id="stat-stale">-</div>
-        <div class="stat-card-label">Stale</div>
-        <div class="stat-card-sub">No ping in 7+ days</div>
+      <div class="stat-card" data-filter="stale">
+        <div class="stat-value stat-value--stale" id="stat-stale">-</div>
+        <div class="stat-label">Stale installs</div>
       </div>
     </div>
 
-    <div class="cards">
-      <div class="card">
-        <h3>Versions</h3>
-        <div id="version-list"><p class="empty">No data</p></div>
+    <div class="chart-section">
+      <canvas id="history-chart"></canvas>
+    </div>
+
+    <div class="breakdown-section">
+      <div class="breakdown-card">
+        <div class="breakdown-title">Version</div>
+        <div id="breakdown-version"></div>
       </div>
-      <div class="card">
-        <h3>Architecture</h3>
-        <div id="arch-list"><p class="empty">No data</p></div>
+      <div class="breakdown-card">
+        <div class="breakdown-title">Architecture</div>
+        <div id="breakdown-arch"></div>
+      </div>
+      <div class="breakdown-card">
+        <div class="breakdown-title">OS</div>
+        <div id="breakdown-os"></div>
+      </div>
+      <div class="breakdown-card">
+        <div class="breakdown-title">Channel</div>
+        <div id="breakdown-channel"></div>
       </div>
     </div>
 
-    <div class="chart-card">
-      <div class="chart-header">
-        <h3>Install History</h3>
-        <select id="time-window">
-          <option value="7" selected>7 days</option>
-          <option value="30">30 days</option>
-          <option value="60">60 days</option>
-          <option value="90">90 days</option>
-        </select>
+    <div id="details-section" class="details-section">
+      <div class="details-header" id="details-header">
+        <span>Install details (<span id="details-count">0</span>)</span>
+        <i class="ti ti-chevron-down" id="details-chevron"></i>
       </div>
-      <div class="chart-wrap">
-        <canvas id="history-chart"></canvas>
+      <div id="details-body" style="display:none">
+        <div id="card-filter-pill" class="card-filter-pill-wrap" style="display:none"></div>
+        <div class="filter-bar">
+          <div class="dropdown-wrap">
+            <button class="dropdown-btn" id="filter-version">
+              <span class="dropdown-btn-label">Version</span>
+              <i class="ti ti-chevron-down"></i>
+            </button>
+            <div class="dropdown-menu hidden" id="filter-version-menu"></div>
+          </div>
+          <div class="dropdown-wrap">
+            <button class="dropdown-btn" id="filter-arch">
+              <span class="dropdown-btn-label">Arch</span>
+              <i class="ti ti-chevron-down"></i>
+            </button>
+            <div class="dropdown-menu hidden" id="filter-arch-menu"></div>
+          </div>
+          <div class="dropdown-wrap">
+            <button class="dropdown-btn" id="filter-os">
+              <span class="dropdown-btn-label">OS</span>
+              <i class="ti ti-chevron-down"></i>
+            </button>
+            <div class="dropdown-menu hidden" id="filter-os-menu"></div>
+          </div>
+          <div class="dropdown-wrap">
+            <button class="dropdown-btn" id="filter-channel">
+              <span class="dropdown-btn-label">Channel</span>
+              <i class="ti ti-chevron-down"></i>
+            </button>
+            <div class="dropdown-menu hidden" id="filter-channel-menu"></div>
+          </div>
+        </div>
+        <div id="install-rows"></div>
       </div>
     </div>
   </main>
@@ -534,253 +655,413 @@ function dashboardHtml(): string {
 
 <script>
 (function () {
+  var token = sessionStorage.getItem('beacon_token');
   var allInstalls = [];
   var allHistory = {};
+  var validWindows = [1, 7, 14, 30, 90];
+  var storedWindow = parseInt(localStorage.getItem('beacon_window_days') || '1', 10);
+  var windowDays = validWindows.indexOf(storedWindow) >= 0 ? storedWindow : 1;
+  var cardFilter = null;
+  var detailFilters = { version: null, arch: null, os: null, channel: null };
+  var expandedInstallId = null;
+  var detailsOpen = false;
   var histChart = null;
 
-  function $(id) { return document.getElementById(id); }
+  function el(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function relTime(dateStr) {
+    var diff = Date.now() - new Date(dateStr).getTime();
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+    if (diff < 2592000000) return Math.floor(diff / 86400000) + 'd ago';
+    return Math.floor(diff / 2592000000) + 'mo ago';
+  }
+
+  function semverSort(a, b) {
+    var pa = a.split('.').map(Number), pb = b.split('.').map(Number);
+    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+      var d = (pb[i] || 0) - (pa[i] || 0);
+      if (d !== 0) return d;
+    }
+    return 0;
+  }
+
+  function windowCutoff() {
+    return new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  }
 
   // ---- Auth ----
 
-  var token = sessionStorage.getItem('beacon_token');
-  if (token) {
-    loadDashboard(token);
+  function showLogin() {
+    el('login-page').style.display = 'flex';
+    el('dashboard-page').style.display = 'none';
+  }
+  function showDashboard() {
+    el('login-page').style.display = 'none';
+    el('dashboard-page').style.display = 'block';
   }
 
-  $('login-form').addEventListener('submit', function (e) {
+  if (token) { showDashboard(); loadData(token); }
+
+  el('login-form').addEventListener('submit', function (e) {
     e.preventDefault();
-    var pw = $('password-input').value;
     fetch('/auth', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: pw })
+      body: JSON.stringify({ password: el('password-input').value })
     }).then(function (res) {
-      if (!res.ok) {
-        $('login-error').classList.remove('hidden');
-        return;
-      }
-      res.json().then(function (data) {
-        token = data.token;
-        sessionStorage.setItem('beacon_token', token);
-        $('login-error').classList.add('hidden');
-        $('login-overlay').classList.add('hidden');
-        $('dashboard').classList.add('visible');
-        loadDashboard(token);
-      });
-    }).catch(function () {
-      $('login-error').classList.remove('hidden');
-    });
+      if (!res.ok) { el('login-error').style.display = 'block'; return null; }
+      return res.json();
+    }).then(function (data) {
+      if (!data) return;
+      token = data.token;
+      sessionStorage.setItem('beacon_token', token);
+      el('login-error').style.display = 'none';
+      showDashboard();
+      loadData(token);
+    }).catch(function () { el('login-error').style.display = 'block'; });
   });
 
-  // ---- Data loading ----
+  // ---- Data ----
 
-  function loadDashboard(t) {
+  function loadData(t) {
     Promise.all([
       fetch('/installs?key=' + encodeURIComponent(t)),
       fetch('/history?key=' + encodeURIComponent(t))
     ]).then(function (responses) {
       if (!responses[0].ok || !responses[1].ok) {
-        sessionStorage.removeItem('beacon_token');
-        $('login-overlay').classList.remove('hidden');
-        $('dashboard').classList.remove('visible');
-        return;
+        sessionStorage.removeItem('beacon_token'); showLogin(); return null;
       }
-      Promise.all([responses[0].json(), responses[1].json()]).then(function (data) {
-        var rawRows = data[0].installs || [];
-        var projectMap = {};
-        rawRows.forEach(function (row) {
-          var p = row.project;
-          if (!projectMap[p]) projectMap[p] = { count: 0, versions: {}, archs: {} };
-          projectMap[p].count++;
-          projectMap[p].versions[row.version] = (projectMap[p].versions[row.version] || 0) + 1;
-          projectMap[p].archs[row.arch] = (projectMap[p].archs[row.arch] || 0) + 1;
-        });
-        allInstalls = Object.keys(projectMap).map(function (p) {
-          return { project: p, count: projectMap[p].count, versions: projectMap[p].versions, archs: projectMap[p].archs };
-        });
-        allHistory = data[1].history || {};
-
-        var sel = $('project-select');
-        while (sel.options.length > 1) sel.remove(1);
-        allInstalls.forEach(function (inst) {
-          var opt = document.createElement('option');
-          opt.value = inst.project;
-          opt.textContent = inst.project.charAt(0).toUpperCase() + inst.project.slice(1);
-          sel.appendChild(opt);
-        });
-
-        $('login-overlay').classList.add('hidden');
-        $('dashboard').classList.add('visible');
-        renderDashboard(null);
-      });
-    }).catch(function () {
-      sessionStorage.removeItem('beacon_token');
-      $('login-overlay').classList.remove('hidden');
-      $('dashboard').classList.remove('visible');
-    });
-  }
-
-  // ---- Rendering ----
-
-  function renderDashboard(project) {
-    var summaryUrl = '/summary?key=' + encodeURIComponent(token);
-    if (project) summaryUrl += '&project=' + encodeURIComponent(project);
-    fetch(summaryUrl).then(function (res) {
-      return res.json();
+      return Promise.all([responses[0].json(), responses[1].json()]);
     }).then(function (data) {
-      $('stat-active').textContent = (data.active || 0).toLocaleString();
-      $('stat-total').textContent = (data.total || 0).toLocaleString();
-      $('stat-stale').textContent = (data.stale || 0).toLocaleString();
-    }).catch(function () {});
-
-    var filtered = project
-      ? allInstalls.filter(function (i) { return i.project === project; })
-      : allInstalls;
-
-    var total = filtered.reduce(function (s, i) { return s + i.count; }, 0);
-
-    var versions = {};
-    var archs = {};
-    filtered.forEach(function (inst) {
-      Object.keys(inst.versions).forEach(function (v) {
-        versions[v] = (versions[v] || 0) + inst.versions[v];
-      });
-      Object.keys(inst.archs).forEach(function (a) {
-        archs[a] = (archs[a] || 0) + inst.archs[a];
-      });
-    });
-
-    renderDist('version-list', versions, total, true);
-    renderDist('arch-list', archs, total, false);
-    renderChart(project);
+      if (!data) return;
+      allInstalls = (data[0].installs || []).filter(function (i) { return i.project === 'nestview'; });
+      allHistory = data[1].history || {};
+      render();
+    }).catch(function () { sessionStorage.removeItem('beacon_token'); showLogin(); });
   }
 
-  function semverCompare(a, b) {
-    var pa = a.split('.').map(Number);
-    var pb = b.split('.').map(Number);
-    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
-      var diff = (pb[i] || 0) - (pa[i] || 0);
-      if (diff !== 0) return diff;
-    }
-    return 0;
+  // ---- Render ----
+
+  function render() {
+    renderHeader();
+    renderStatCards();
+    renderChart();
+    renderBreakdowns();
+    renderInstallDetails();
   }
 
-  function renderDist(containerId, dist, total, sortByVersion) {
-    var el = $(containerId);
-    var entries = Object.keys(dist).map(function (k) { return [k, dist[k]]; });
-    if (sortByVersion) {
-      entries.sort(function (a, b) { return semverCompare(a[0], b[0]); });
-    } else {
-      entries.sort(function (a, b) { return b[1] - a[1]; });
-    }
-    if (entries.length === 0) {
-      el.innerHTML = '<p class="empty">No data</p>';
-      return;
-    }
-    el.innerHTML = entries.map(function (pair) {
-      var label = pair[0];
-      var count = pair[1];
-      var pct = total > 0 ? Math.round(count / total * 100) : 0;
-      return '<div class="dist-row">' +
-        '<span class="dist-label" title="' + label + '">' + label + '</span>' +
-        '<div class="dist-bar-wrap"><div class="dist-bar" style="width:' + pct + '%"></div></div>' +
-        '<span class="dist-pct">' + pct + '%</span>' +
-        '</div>';
-    }).join('');
+  function renderHeader() {
+    el('window-btn-label').textContent = windowDays + 'd';
+    document.querySelectorAll('#window-menu .dropdown-item').forEach(function (item) {
+      item.classList.toggle('active', parseInt(item.dataset.value, 10) === windowDays);
+    });
   }
 
-  function renderChart(project) {
-    var days = parseInt($('time-window').value, 10);
-    var now = new Date();
-    var pacificOffset = -7 * 60;
-    var dates = [];
-    for (var i = days - 1; i >= 0; i--) {
-      var d = new Date(now.getTime() - i * 86400000 + pacificOffset * 60000);
-      dates.push(d.toISOString().slice(0, 10));
-    }
-    var cutoff = dates[0];
-
-    var countsByDate = {};
-    var projects = project ? [project] : Object.keys(allHistory);
-    projects.forEach(function (p) {
-      var entries = allHistory[p];
-      if (!entries) return;
-      entries.forEach(function (e) {
-        if (e.date >= cutoff) {
-          countsByDate[e.date] = (countsByDate[e.date] || 0) + e.count;
-        }
-      });
+  function renderStatCards() {
+    var cutoff = windowCutoff();
+    var activeCount = 0, staleCount = 0;
+    allInstalls.forEach(function (i) {
+      if (new Date(i.last_seen) >= cutoff) activeCount++; else staleCount++;
     });
-
-    var chartData = dates.map(function (d) {
-      return countsByDate[d] !== undefined ? countsByDate[d] : null;
+    el('stat-active').textContent = activeCount.toLocaleString();
+    el('stat-total').textContent = allInstalls.length.toLocaleString();
+    el('stat-stale').textContent = staleCount.toLocaleString();
+    document.querySelectorAll('.stat-card').forEach(function (card) {
+      card.classList.toggle('stat-card--active', card.dataset.filter === cardFilter);
     });
+  }
 
-    var wrap = document.querySelector('.chart-wrap');
-    var canvas = $('history-chart');
-    canvas.width = wrap.offsetWidth;
-    canvas.height = wrap.offsetHeight;
-
+  function renderChart() {
+    var canvas = el('history-chart');
     var ctx = canvas.getContext('2d');
-    if (histChart) histChart.destroy();
+    if (histChart) { histChart.destroy(); histChart = null; }
+
+    var labels = [], chartData = [];
+
+    if (windowDays === 1) {
+      var now = new Date();
+      for (var h = 23; h >= 0; h--) {
+        var hStart = new Date(now.getTime() - (h + 1) * 3600000);
+        var hEnd = new Date(now.getTime() - h * 3600000);
+        var cnt = 0;
+        allInstalls.forEach(function (i) {
+          var ls = new Date(i.last_seen);
+          if (ls >= hStart && ls < hEnd) cnt++;
+        });
+        var hh = hStart.getUTCHours();
+        labels.push((hh < 10 ? '0' : '') + hh + ':00');
+        chartData.push(cnt);
+      }
+    } else {
+      var nowDate = new Date();
+      var projectHistory = allHistory['nestview'] || [];
+      var histMap = {};
+      projectHistory.forEach(function (entry) { histMap[entry.date] = entry.count; });
+      for (var idx = windowDays - 1; idx >= 0; idx--) {
+        var dateObj = new Date(nowDate.getTime() - idx * 86400000);
+        var dateStr = dateObj.toISOString().slice(0, 10);
+        labels.push(dateStr.slice(5));
+        chartData.push(histMap[dateStr] !== undefined ? histMap[dateStr] : null);
+      }
+    }
+
+    var gradient = ctx.createLinearGradient(0, 0, 0, 140);
+    gradient.addColorStop(0, 'rgba(34,211,238,0.18)');
+    gradient.addColorStop(1, 'rgba(34,211,238,0)');
+
     histChart = new Chart(ctx, {
       type: 'line',
       data: {
-        labels: dates,
+        labels: labels,
         datasets: [{
-          data: chartData,
-          borderColor: '#22c55e',
-          borderWidth: 2,
-          pointRadius: 2,
-          pointHoverRadius: 4,
-          fill: false,
-          tension: 0.3,
-          spanGaps: true
+          data: chartData, borderColor: '#22d3ee', borderWidth: 2,
+          pointRadius: 0, pointHoverRadius: 3,
+          fill: true, backgroundColor: gradient, tension: 0.3, spanGaps: true
         }]
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
+        responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: '#1a1a1a',
-            borderColor: '#2e2e2e',
-            borderWidth: 1,
-            titleColor: '#888',
-            bodyColor: '#22c55e',
-            callbacks: {
-              label: function (ctx) { return ' ' + (ctx.parsed.y !== null ? ctx.parsed.y : '-') + ' installs'; }
-            }
+            backgroundColor: '#1c2230', borderColor: '#21293a', borderWidth: 1,
+            titleColor: '#64748b', bodyColor: '#22d3ee',
+            callbacks: { label: function (c) { return ' ' + (c.parsed.y !== null ? c.parsed.y : '-') + ' installs'; } }
           }
         },
         scales: {
-          x: {
-            grid: { color: '#2a2a2a' },
-            ticks: { color: '#555', maxTicksLimit: 10, font: { size: 11 } }
-          },
-          y: {
-            grid: { color: '#2a2a2a' },
-            ticks: { color: '#555', font: { size: 11 } },
-            beginAtZero: true
-          }
+          x: { grid: { color: '#21293a' }, ticks: { color: '#64748b', maxTicksLimit: 10, font: { size: 11 } } },
+          y: { grid: { color: '#21293a' }, ticks: { color: '#64748b', font: { size: 11 } }, beginAtZero: true }
         }
       }
     });
   }
 
-  // ---- Event listeners ----
+  function renderBreakdowns() {
+    var cutoff = windowCutoff();
+    var active = allInstalls.filter(function (i) { return new Date(i.last_seen) >= cutoff; });
+    var total = active.length;
 
-  $('project-select').addEventListener('change', function () {
-    renderDashboard(this.value || null);
+    function buildDist(field) {
+      var dist = {};
+      active.forEach(function (i) {
+        var v = i[field] != null ? i[field] : 'unknown';
+        dist[v] = (dist[v] || 0) + 1;
+      });
+      return dist;
+    }
+
+    renderDist('breakdown-version', buildDist('version'), total, true);
+    renderDist('breakdown-arch', buildDist('arch'), total, false);
+    renderDist('breakdown-os', buildDist('os'), total, false);
+    renderDist('breakdown-channel', buildDist('channel'), total, false);
+  }
+
+  function renderDist(containerId, dist, total, sortByVersion) {
+    var container = el(containerId);
+    var entries = Object.keys(dist).map(function (k) { return [k, dist[k]]; });
+    if (sortByVersion) entries.sort(function (a, b) { return semverSort(a[0], b[0]); });
+    else entries.sort(function (a, b) { return b[1] - a[1]; });
+    if (entries.length === 0) { container.innerHTML = '<span class="empty-text">No data</span>'; return; }
+    container.innerHTML = entries.map(function (pair) {
+      var pct = total > 0 ? Math.round(pair[1] / total * 100) : 0;
+      return '<div class="breakdown-row">' +
+        '<span class="breakdown-label" title="' + esc(pair[0]) + '">' + esc(pair[0]) + '</span>' +
+        '<div class="breakdown-bar-track"><div class="breakdown-bar" style="width:' + pct + '%"></div></div>' +
+        '<span class="breakdown-pct">' + pct + '%</span></div>';
+    }).join('');
+  }
+
+  function renderInstallDetails() {
+    var cutoff = windowCutoff();
+    var base;
+    if (cardFilter === 'active') base = allInstalls.filter(function (i) { return new Date(i.last_seen) >= cutoff; });
+    else if (cardFilter === 'stale') base = allInstalls.filter(function (i) { return new Date(i.last_seen) < cutoff; });
+    else base = allInstalls.slice();
+
+    var filtered = base.filter(function (i) {
+      if (detailFilters.version && i.version !== detailFilters.version) return false;
+      if (detailFilters.arch && i.arch !== detailFilters.arch) return false;
+      if (detailFilters.os && (i.os != null ? i.os : 'unknown') !== detailFilters.os) return false;
+      if (detailFilters.channel && (i.channel != null ? i.channel : 'unknown') !== detailFilters.channel) return false;
+      return true;
+    });
+
+    el('details-count').textContent = filtered.length;
+    el('details-body').style.display = detailsOpen ? 'block' : 'none';
+    el('details-chevron').className = 'ti ti-chevron-' + (detailsOpen ? 'up' : 'down');
+
+    var pillWrap = el('card-filter-pill');
+    if (cardFilter === 'active' || cardFilter === 'stale') {
+      var pillLabel = cardFilter === 'active' ? 'Active installs' : 'Stale installs';
+      pillWrap.style.display = 'block';
+      pillWrap.innerHTML = '<span class="filter-pill">' + esc(pillLabel) +
+        ' <button class="pill-dismiss" id="dismiss-card-filter"><i class="ti ti-x"></i></button></span>';
+      el('dismiss-card-filter').addEventListener('click', function (e) {
+        e.stopPropagation();
+        cardFilter = null;
+        render();
+      });
+    } else {
+      pillWrap.style.display = 'none';
+      pillWrap.innerHTML = '';
+    }
+
+    populateDropdown('filter-version', 'version', base);
+    populateDropdown('filter-arch', 'arch', base);
+    populateDropdown('filter-os', 'os', base);
+    populateDropdown('filter-channel', 'channel', base);
+    renderInstallRows(filtered);
+  }
+
+  function populateDropdown(btnId, field, base) {
+    var btn = el(btnId);
+    var menu = el(btnId + '-menu');
+    var selected = detailFilters[field];
+
+    btn.querySelector('.dropdown-btn-label').textContent =
+      selected != null ? selected : (field.charAt(0).toUpperCase() + field.slice(1));
+    btn.classList.toggle('dropdown-btn--active', selected != null);
+
+    var vals = {};
+    base.forEach(function (i) { var v = i[field] != null ? i[field] : 'unknown'; vals[v] = true; });
+
+    menu.innerHTML =
+      '<div class="dropdown-item' + (selected == null ? ' active' : '') + '" data-value="">All</div>' +
+      Object.keys(vals).sort().map(function (v) {
+        return '<div class="dropdown-item' + (v === selected ? ' active' : '') + '" data-value="' + esc(v) + '">' + esc(v) + '</div>';
+      }).join('');
+
+    menu.querySelectorAll('.dropdown-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        detailFilters[field] = item.dataset.value || null;
+        closeDropdowns();
+        renderInstallDetails();
+      });
+    });
+  }
+
+  function renderInstallRows(installs) {
+    var container = el('install-rows');
+    if (installs.length === 0) {
+      container.innerHTML = '<div class="empty-row">No installs match the current filters.</div>';
+      return;
+    }
+    container.innerHTML = installs.map(function (i) {
+      var shortId = i.install_id ? (i.install_id.slice(0, 8) + '…') : 'unknown';
+      var osLabel = i.os != null ? i.os : 'unknown';
+      var chanLabel = i.channel != null ? i.channel : 'unknown';
+      var osClass = osLabel === 'Darwin' ? 'chip--purple' : 'chip--indigo';
+      var chanClass = chanLabel === 'stable' ? 'chip--cyan' : 'chip--amber';
+      var isExpanded = expandedInstallId === i.install_id;
+
+      var chips = '<span class="chip ' + osClass + '">' + esc(osLabel) + '</span>' +
+        '<span class="chip ' + chanClass + '">' + esc(chanLabel) + '</span>' +
+        '<span class="chip chip--neutral">' + esc(i.arch || 'unknown') + '</span>';
+      if (i.container_count != null) chips += '<span class="chip chip--neutral">' + i.container_count + '</span>';
+
+      var panel = '';
+      if (isExpanded) {
+        panel = '<div class="install-detail-panel"><div class="detail-grid">' +
+          '<div class="detail-field"><span class="detail-key">install_id</span><span class="detail-val detail-mono">' + esc(i.install_id || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">arch</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">os</span><span class="detail-val">' + esc(i.os || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">channel</span><span class="detail-val">' + esc(i.channel || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">containers</span><span class="detail-val">' + (i.container_count != null ? i.container_count : '-') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val detail-mono">' + esc(i.last_seen || '') + '</span></div>' +
+          '</div></div>';
+      }
+
+      return '<div class="install-row' + (isExpanded ? ' install-row--expanded' : '') + '" data-id="' + esc(i.install_id || '') + '">' +
+        '<div class="install-row-main">' +
+        '<span class="install-id">' + esc(shortId) + '</span>' +
+        '<div class="install-chips">' + chips + '</div>' +
+        '<div class="install-right"><span class="install-version">' + esc(i.version || '') + '</span><span class="install-time">' + esc(relTime(i.last_seen)) + '</span></div>' +
+        '</div>' + panel + '</div>';
+    }).join('');
+
+    container.querySelectorAll('.install-row').forEach(function (row) {
+      row.querySelector('.install-row-main').addEventListener('click', function () {
+        var id = row.dataset.id;
+        expandedInstallId = expandedInstallId === id ? null : id;
+        renderInstallRows(installs);
+      });
+    });
+  }
+
+  // ---- Dropdowns ----
+
+  function closeDropdowns() {
+    document.querySelectorAll('.dropdown-menu').forEach(function (m) { m.classList.add('hidden'); });
+  }
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('.dropdown-wrap')) closeDropdowns();
   });
 
-  $('time-window').addEventListener('change', function () {
-    var project = $('project-select').value || null;
-    renderChart(project);
+  el('window-btn').addEventListener('click', function (e) {
+    e.stopPropagation();
+    var menu = el('window-menu');
+    var wasOpen = !menu.classList.contains('hidden');
+    closeDropdowns();
+    if (!wasOpen) menu.classList.remove('hidden');
+  });
+
+  el('window-menu').querySelectorAll('.dropdown-item').forEach(function (item) {
+    item.addEventListener('click', function () {
+      windowDays = parseInt(item.dataset.value, 10);
+      localStorage.setItem('beacon_window_days', String(windowDays));
+      closeDropdowns();
+      render();
+    });
+  });
+
+  ['filter-version', 'filter-arch', 'filter-os', 'filter-channel'].forEach(function (id) {
+    el(id).addEventListener('click', function (e) {
+      e.stopPropagation();
+      var menu = el(id + '-menu');
+      var wasOpen = !menu.classList.contains('hidden');
+      closeDropdowns();
+      if (!wasOpen) menu.classList.remove('hidden');
+    });
+  });
+
+  // ---- Details toggle ----
+
+  el('details-header').addEventListener('click', function () {
+    detailsOpen = !detailsOpen;
+    el('details-body').style.display = detailsOpen ? 'block' : 'none';
+    el('details-chevron').className = 'ti ti-chevron-' + (detailsOpen ? 'up' : 'down');
+  });
+
+  // ---- Stat card clicks ----
+
+  document.querySelectorAll('.stat-card').forEach(function (card) {
+    card.addEventListener('click', function () {
+      var filter = card.dataset.filter;
+      if (cardFilter === filter) {
+        cardFilter = null;
+      } else {
+        cardFilter = filter;
+        if (!detailsOpen) detailsOpen = true;
+        setTimeout(function () {
+          el('details-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 50);
+      }
+      render();
+    });
   });
 })();
-</script>
+<\/script>
 </body>
 </html>`;
 }
