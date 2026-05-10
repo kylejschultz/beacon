@@ -407,12 +407,8 @@ function dashboardHtml(): string {
     #login-error { color: #f87171; font-size: 0.85rem; margin-top: 0.6rem; display: none; }
 
     /* ---- Header ---- */
-    header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 1rem 1.5rem; border-bottom: 1px solid #21293a;
-    }
+    header { display: flex; align-items: center; padding: 1rem 1.5rem; border-bottom: 1px solid #21293a; }
     .header-logo { display: flex; align-items: center; gap: 0.5rem; }
-    .header-right { display: flex; align-items: center; gap: 0.75rem; }
     .pill-btn {
       display: inline-flex; align-items: center; gap: 0.4rem;
       background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.2);
@@ -447,6 +443,8 @@ function dashboardHtml(): string {
       background: #161b22; border: 1px solid #21293a; border-radius: 8px;
       padding: 1.25rem; margin-bottom: 1.5rem;
     }
+    .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+    .chart-title { font-size: 0.82rem; color: #64748b; }
     .chart-section canvas { display: block; width: 100% !important; height: 140px !important; }
 
     /* ---- Breakdowns ---- */
@@ -524,9 +522,9 @@ function dashboardHtml(): string {
     .install-detail-panel { background: #1c2230; border-top: 1px solid #21293a; padding: 0.85rem 0; }
     .detail-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem 1rem; }
     @media (max-width: 640px) { .detail-grid { grid-template-columns: 1fr 1fr; } }
-    .detail-field { display: flex; flex-direction: column; gap: 0.2rem; }
+    .detail-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
     .detail-key { font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
-    .detail-val { font-size: 0.82rem; color: #e2e8f0; word-break: break-all; }
+    .detail-val { font-size: 0.82rem; color: #e2e8f0; word-break: break-all; overflow-wrap: anywhere; }
     .detail-mono { font-family: monospace; font-size: 0.76rem; }
     .empty-row { font-size: 0.85rem; color: #64748b; padding: 1rem 0; }
   </style>
@@ -552,21 +550,6 @@ function dashboardHtml(): string {
     <div class="header-logo">
       <span class="logo-dot"></span>
       <span class="logo-text">beacon</span>
-    </div>
-    <div class="header-right">
-      <div class="dropdown-wrap">
-        <button class="pill-btn" id="window-btn">
-          <span id="window-btn-label">1d</span>
-          <i class="ti ti-chevron-down"></i>
-        </button>
-        <div class="dropdown-menu hidden" id="window-menu">
-          <div class="dropdown-item" data-value="1">1d</div>
-          <div class="dropdown-item" data-value="7">7d</div>
-          <div class="dropdown-item" data-value="14">14d</div>
-          <div class="dropdown-item" data-value="30">30d</div>
-          <div class="dropdown-item" data-value="90">90d</div>
-        </div>
-      </div>
       <span class="pill-badge">nestview</span>
     </div>
   </header>
@@ -588,6 +571,22 @@ function dashboardHtml(): string {
     </div>
 
     <div class="chart-section">
+      <div class="chart-header">
+        <span class="chart-title" id="chart-title">Active installs - last 24h</span>
+        <div class="dropdown-wrap">
+          <button class="pill-btn" id="window-btn">
+            <span id="window-btn-label">1d</span>
+            <i class="ti ti-chevron-down"></i>
+          </button>
+          <div class="dropdown-menu hidden" id="window-menu">
+            <div class="dropdown-item" data-value="1">1d</div>
+            <div class="dropdown-item" data-value="7">7d</div>
+            <div class="dropdown-item" data-value="14">14d</div>
+            <div class="dropdown-item" data-value="30">30d</div>
+            <div class="dropdown-item" data-value="90">90d</div>
+          </div>
+        </div>
+      </div>
       <canvas id="history-chart"></canvas>
     </div>
 
@@ -667,6 +666,9 @@ function dashboardHtml(): string {
   var detailsOpen = false;
   var histChart = null;
 
+  var ACTIVE_MS = 36 * 3600000;
+  var STALE_MS = 3 * 86400000;
+
   function el(id) { return document.getElementById(id); }
 
   function esc(s) {
@@ -693,7 +695,7 @@ function dashboardHtml(): string {
   }
 
   function windowCutoff() {
-    return new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+    return Date.now() - windowDays * 86400000;
   }
 
   // ---- Auth ----
@@ -750,14 +752,14 @@ function dashboardHtml(): string {
   // ---- Render ----
 
   function render() {
-    renderHeader();
+    renderWindowPicker();
     renderStatCards();
     renderChart();
     renderBreakdowns();
     renderInstallDetails();
   }
 
-  function renderHeader() {
+  function renderWindowPicker() {
     el('window-btn-label').textContent = windowDays + 'd';
     document.querySelectorAll('#window-menu .dropdown-item').forEach(function (item) {
       item.classList.toggle('active', parseInt(item.dataset.value, 10) === windowDays);
@@ -765,10 +767,12 @@ function dashboardHtml(): string {
   }
 
   function renderStatCards() {
-    var cutoff = windowCutoff();
+    var now = Date.now();
     var activeCount = 0, staleCount = 0;
     allInstalls.forEach(function (i) {
-      if (new Date(i.last_seen) >= cutoff) activeCount++; else staleCount++;
+      var ls = new Date(i.last_seen).getTime();
+      if (now - ls <= ACTIVE_MS) activeCount++;
+      if (now - ls >= STALE_MS) staleCount++;
     });
     el('stat-active').textContent = activeCount.toLocaleString();
     el('stat-total').textContent = allInstalls.length.toLocaleString();
@@ -779,36 +783,62 @@ function dashboardHtml(): string {
   }
 
   function renderChart() {
+    var windowLabel = windowDays === 1 ? 'last 24h' : 'last ' + windowDays + 'd';
+    var cardLabel = cardFilter === 'all' ? 'All installs' : cardFilter === 'stale' ? 'Stale installs' : 'Active installs';
+    el('chart-title').textContent = cardLabel + ' - ' + windowLabel;
+
     var canvas = el('history-chart');
     var ctx = canvas.getContext('2d');
     if (histChart) { histChart.destroy(); histChart = null; }
 
     var labels = [], chartData = [];
+    var nowTs = Date.now();
+    var i, cnt, ls;
 
     if (windowDays === 1) {
-      var now = new Date();
       for (var h = 23; h >= 0; h--) {
-        var hStart = new Date(now.getTime() - (h + 1) * 3600000);
-        var hEnd = new Date(now.getTime() - h * 3600000);
-        var cnt = 0;
-        allInstalls.forEach(function (i) {
-          var ls = new Date(i.last_seen);
-          if (ls >= hStart && ls < hEnd) cnt++;
-        });
-        var hh = hStart.getUTCHours();
+        var hEndMs = nowTs - h * 3600000;
+        var hStartMs = hEndMs - 3600000;
+        cnt = 0;
+        for (i = 0; i < allInstalls.length; i++) {
+          ls = new Date(allInstalls[i].last_seen).getTime();
+          if (cardFilter === 'stale') {
+            if (hEndMs - ls >= STALE_MS) cnt++;
+          } else if (cardFilter === 'all') {
+            if (ls >= hStartMs && ls < hEndMs) cnt++;
+          } else {
+            if (hEndMs - ls <= ACTIVE_MS && ls < hEndMs) cnt++;
+          }
+        }
+        var hh = new Date(hStartMs).getUTCHours();
         labels.push((hh < 10 ? '0' : '') + hh + ':00');
         chartData.push(cnt);
       }
-    } else {
-      var nowDate = new Date();
+    } else if (cardFilter === 'all') {
       var projectHistory = allHistory['nestview'] || [];
       var histMap = {};
-      projectHistory.forEach(function (entry) { histMap[entry.date] = entry.count; });
-      for (var idx = windowDays - 1; idx >= 0; idx--) {
-        var dateObj = new Date(nowDate.getTime() - idx * 86400000);
-        var dateStr = dateObj.toISOString().slice(0, 10);
+      for (i = 0; i < projectHistory.length; i++) {
+        histMap[projectHistory[i].date] = projectHistory[i].count;
+      }
+      for (var di = windowDays - 1; di >= 0; di--) {
+        var dateStr = new Date(nowTs - di * 86400000).toISOString().slice(0, 10);
         labels.push(dateStr.slice(5));
         chartData.push(histMap[dateStr] !== undefined ? histMap[dateStr] : null);
+      }
+    } else {
+      for (var dj = windowDays - 1; dj >= 0; dj--) {
+        var dayEndMs = nowTs - dj * 86400000;
+        cnt = 0;
+        for (i = 0; i < allInstalls.length; i++) {
+          ls = new Date(allInstalls[i].last_seen).getTime();
+          if (cardFilter === 'stale') {
+            if (dayEndMs - ls >= STALE_MS) cnt++;
+          } else {
+            if (dayEndMs - ls <= ACTIVE_MS && ls < dayEndMs) cnt++;
+          }
+        }
+        labels.push(new Date(dayEndMs).toISOString().slice(5, 10));
+        chartData.push(cnt);
       }
     }
 
@@ -846,13 +876,13 @@ function dashboardHtml(): string {
 
   function renderBreakdowns() {
     var cutoff = windowCutoff();
-    var active = allInstalls.filter(function (i) { return new Date(i.last_seen) >= cutoff; });
+    var active = allInstalls.filter(function (i) { return new Date(i.last_seen).getTime() >= cutoff; });
     var total = active.length;
 
     function buildDist(field) {
       var dist = {};
       active.forEach(function (i) {
-        var v = i[field] != null ? i[field] : 'unknown';
+        var v = (i[field] != null && i[field] !== '') ? i[field] : '-';
         dist[v] = (dist[v] || 0) + 1;
       });
       return dist;
@@ -880,17 +910,23 @@ function dashboardHtml(): string {
   }
 
   function renderInstallDetails() {
-    var cutoff = windowCutoff();
+    var now = Date.now();
     var base;
-    if (cardFilter === 'active') base = allInstalls.filter(function (i) { return new Date(i.last_seen) >= cutoff; });
-    else if (cardFilter === 'stale') base = allInstalls.filter(function (i) { return new Date(i.last_seen) < cutoff; });
-    else base = allInstalls.slice();
+    if (cardFilter === 'active') {
+      base = allInstalls.filter(function (i) { return now - new Date(i.last_seen).getTime() <= ACTIVE_MS; });
+    } else if (cardFilter === 'stale') {
+      base = allInstalls.filter(function (i) { return now - new Date(i.last_seen).getTime() >= STALE_MS; });
+    } else {
+      base = allInstalls.slice();
+    }
 
     var filtered = base.filter(function (i) {
       if (detailFilters.version && i.version !== detailFilters.version) return false;
       if (detailFilters.arch && i.arch !== detailFilters.arch) return false;
-      if (detailFilters.os && (i.os != null ? i.os : 'unknown') !== detailFilters.os) return false;
-      if (detailFilters.channel && (i.channel != null ? i.channel : 'unknown') !== detailFilters.channel) return false;
+      var osVal = (i.os != null && i.os !== '') ? i.os : '-';
+      if (detailFilters.os && osVal !== detailFilters.os) return false;
+      var chanVal = (i.channel != null && i.channel !== '') ? i.channel : '-';
+      if (detailFilters.channel && chanVal !== detailFilters.channel) return false;
       return true;
     });
 
@@ -900,7 +936,7 @@ function dashboardHtml(): string {
 
     var pillWrap = el('card-filter-pill');
     if (cardFilter === 'active' || cardFilter === 'stale') {
-      var pillLabel = cardFilter === 'active' ? 'Active installs' : 'Stale installs';
+      var pillLabel = cardFilter === 'active' ? 'Active (36h)' : 'Stale (3d+)';
       pillWrap.style.display = 'block';
       pillWrap.innerHTML = '<span class="filter-pill">' + esc(pillLabel) +
         ' <button class="pill-dismiss" id="dismiss-card-filter"><i class="ti ti-x"></i></button></span>';
@@ -931,7 +967,10 @@ function dashboardHtml(): string {
     btn.classList.toggle('dropdown-btn--active', selected != null);
 
     var vals = {};
-    base.forEach(function (i) { var v = i[field] != null ? i[field] : 'unknown'; vals[v] = true; });
+    base.forEach(function (i) {
+      var v = (i[field] != null && i[field] !== '') ? i[field] : '-';
+      vals[v] = true;
+    });
 
     menu.innerHTML =
       '<div class="dropdown-item' + (selected == null ? ' active' : '') + '" data-value="">All</div>' +
@@ -956,10 +995,11 @@ function dashboardHtml(): string {
     }
     container.innerHTML = installs.map(function (i) {
       var shortId = i.install_id ? (i.install_id.slice(0, 8) + '…') : 'unknown';
-      var osLabel = i.os != null ? i.os : 'unknown';
-      var chanLabel = i.channel != null ? i.channel : 'unknown';
+      var osLabel = (i.os != null && i.os !== '') ? i.os : '-';
+      var chanVal = (i.channel != null && i.channel !== '') ? i.channel : null;
+      var chanLabel = chanVal || '-';
       var osClass = osLabel === 'Darwin' ? 'chip--purple' : 'chip--indigo';
-      var chanClass = chanLabel === 'stable' ? 'chip--cyan' : 'chip--amber';
+      var chanClass = chanVal === 'stable' ? 'chip--cyan' : chanVal ? 'chip--amber' : 'chip--neutral';
       var isExpanded = expandedInstallId === i.install_id;
 
       var chips = '<span class="chip ' + osClass + '">' + esc(osLabel) + '</span>' +
@@ -973,8 +1013,8 @@ function dashboardHtml(): string {
           '<div class="detail-field"><span class="detail-key">install_id</span><span class="detail-val detail-mono">' + esc(i.install_id || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">arch</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">os</span><span class="detail-val">' + esc(i.os || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">channel</span><span class="detail-val">' + esc(i.channel || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">os</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">channel</span><span class="detail-val">' + esc(chanLabel) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">containers</span><span class="detail-val">' + (i.container_count != null ? i.container_count : '-') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val detail-mono">' + esc(i.last_seen || '') + '</span></div>' +
