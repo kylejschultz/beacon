@@ -441,7 +441,7 @@ function dashboardHtml(): string {
     /* ---- Chart ---- */
     .chart-section {
       background: #161b22; border: 1px solid #21293a; border-radius: 8px;
-      padding: 1.25rem; margin-bottom: 1.5rem;
+      padding: 1.25rem 1.25rem 2rem; margin-bottom: 1.5rem;
     }
     .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
     .chart-title { font-size: 0.82rem; color: #64748b; }
@@ -462,12 +462,7 @@ function dashboardHtml(): string {
 
     /* ---- Details section ---- */
     .details-section { background: #161b22; border: 1px solid #21293a; border-radius: 8px; }
-    .details-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 1rem 1.25rem; cursor: pointer; user-select: none;
-      font-size: 0.9rem; color: #e2e8f0; border-radius: 8px;
-    }
-    .details-header:hover { background: rgba(255,255,255,0.02); }
+    .details-header { display: flex; align-items: center; padding: 1rem 1.25rem; font-size: 0.9rem; color: #e2e8f0; }
     #details-body { padding: 0 1.25rem 1.25rem; }
 
     /* ---- Filter bar ---- */
@@ -610,11 +605,10 @@ function dashboardHtml(): string {
     </div>
 
     <div id="details-section" class="details-section">
-      <div class="details-header" id="details-header">
+      <div class="details-header">
         <span>Install details (<span id="details-count">0</span>)</span>
-        <i class="ti ti-chevron-down" id="details-chevron"></i>
       </div>
-      <div id="details-body" style="display:none">
+      <div id="details-body">
         <div id="card-filter-pill" class="card-filter-pill-wrap" style="display:none"></div>
         <div class="filter-bar">
           <div class="dropdown-wrap">
@@ -663,7 +657,6 @@ function dashboardHtml(): string {
   var cardFilter = null;
   var detailFilters = { version: null, arch: null, os: null, channel: null };
   var expandedInstallId = null;
-  var detailsOpen = false;
   var histChart = null;
 
   var ACTIVE_MS = 36 * 3600000;
@@ -683,6 +676,15 @@ function dashboardHtml(): string {
     if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
     if (diff < 2592000000) return Math.floor(diff / 86400000) + 'd ago';
     return Math.floor(diff / 2592000000) + 'mo ago';
+  }
+
+  function fmtDate(dateStr) {
+    try {
+      return new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', year: 'numeric', month: 'short',
+        day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
+      }).format(new Date(dateStr));
+    } catch (e) { return dateStr || ''; }
   }
 
   function semverSort(a, b) {
@@ -842,6 +844,10 @@ function dashboardHtml(): string {
       }
     }
 
+    var nonNull = chartData.filter(function (v) { return v !== null; });
+    var dataMax = nonNull.length > 0 ? Math.max.apply(null, nonNull) : 0;
+    var yStep = dataMax <= 5 ? 1 : dataMax <= 20 ? 5 : 10;
+
     var gradient = ctx.createLinearGradient(0, 0, 0, 140);
     gradient.addColorStop(0, 'rgba(34,211,238,0.18)');
     gradient.addColorStop(1, 'rgba(34,211,238,0)');
@@ -868,7 +874,7 @@ function dashboardHtml(): string {
         },
         scales: {
           x: { grid: { color: '#21293a' }, ticks: { color: '#64748b', maxTicksLimit: 10, font: { size: 11 } } },
-          y: { grid: { color: '#21293a' }, ticks: { color: '#64748b', font: { size: 11 } }, beginAtZero: true }
+          y: { grid: { color: '#21293a' }, ticks: { color: '#64748b', font: { size: 11 }, stepSize: yStep, precision: 0 }, beginAtZero: true }
         }
       }
     });
@@ -931,8 +937,6 @@ function dashboardHtml(): string {
     });
 
     el('details-count').textContent = filtered.length;
-    el('details-body').style.display = detailsOpen ? 'block' : 'none';
-    el('details-chevron').className = 'ti ti-chevron-' + (detailsOpen ? 'up' : 'down');
 
     var pillWrap = el('card-filter-pill');
     if (cardFilter === 'active' || cardFilter === 'stale') {
@@ -1017,7 +1021,7 @@ function dashboardHtml(): string {
           '<div class="detail-field"><span class="detail-key">channel</span><span class="detail-val">' + esc(chanLabel) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">containers</span><span class="detail-val">' + (i.container_count != null ? i.container_count : '-') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val detail-mono">' + esc(i.last_seen || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
           '</div></div>';
       }
 
@@ -1075,14 +1079,6 @@ function dashboardHtml(): string {
     });
   });
 
-  // ---- Details toggle ----
-
-  el('details-header').addEventListener('click', function () {
-    detailsOpen = !detailsOpen;
-    el('details-body').style.display = detailsOpen ? 'block' : 'none';
-    el('details-chevron').className = 'ti ti-chevron-' + (detailsOpen ? 'up' : 'down');
-  });
-
   // ---- Stat card clicks ----
 
   document.querySelectorAll('.stat-card').forEach(function (card) {
@@ -1092,7 +1088,6 @@ function dashboardHtml(): string {
         cardFilter = null;
       } else {
         cardFilter = filter;
-        if (!detailsOpen) detailsOpen = true;
         setTimeout(function () {
           el('details-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
         }, 50);
