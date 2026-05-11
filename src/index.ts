@@ -241,10 +241,12 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
   const activeStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleEnd = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const pacificMidnightUtc = `${pacificDateString()}T${String(Math.abs(PACIFIC_OFFSET_HOURS)).padStart(2, "0")}:00:00.000Z`;
 
   let activeResult: { count: number } | null;
   let totalResult: { count: number } | null;
   let staleResult: { count: number } | null;
+  let newTodayResult: { count: number } | null;
 
   if (filterProject) {
     activeResult = await env.ANALYTICS_DB.prepare(
@@ -256,6 +258,9 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
     staleResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ? AND project = ?`
     ).bind(staleStart, staleEnd, filterProject).first<{ count: number }>();
+    newTodayResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE first_seen >= ? AND project = ?`
+    ).bind(pacificMidnightUtc, filterProject).first<{ count: number }>();
   } else {
     activeResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?`
@@ -266,6 +271,9 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
     staleResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ?`
     ).bind(staleStart, staleEnd).first<{ count: number }>();
+    newTodayResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE first_seen >= ?`
+    ).bind(pacificMidnightUtc).first<{ count: number }>();
   }
 
   return new Response(
@@ -273,6 +281,7 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
       active: activeResult?.count ?? 0,
       total: totalResult?.count ?? 0,
       stale: staleResult?.count ?? 0,
+      new_today: newTodayResult?.count ?? 0,
     }),
     { status: 200, headers: { "Content-Type": "application/json" } }
   );
@@ -320,6 +329,7 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
     version: string;
     arch: string;
     last_seen: string;
+    first_seen: string | null;
     channel: string | null;
     container_count: number | null;
     os: string | null;
@@ -329,7 +339,7 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
 
   if (filterProject) {
     const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, install_id, version, arch, last_seen, channel, container_count, os
+      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, os
        FROM installs WHERE project = ? ORDER BY project, last_seen DESC`
     )
       .bind(filterProject)
@@ -337,7 +347,7 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
     rows = result.results;
   } else {
     const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, install_id, version, arch, last_seen, channel, container_count, os
+      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, os
        FROM installs ORDER BY project, last_seen DESC`
     )
       .all<InstallRow>();
@@ -350,6 +360,7 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
     version: row.version,
     arch: row.arch,
     last_seen: toPacificISOString(row.last_seen),
+    first_seen: row.first_seen ? toPacificISOString(row.first_seen) : null,
     channel: row.channel,
     container_count: row.container_count,
     os: row.os,
@@ -426,8 +437,9 @@ function dashboardHtml(): string {
     main { max-width: 960px; width: 100%; margin: 0 auto; padding: 1.5rem; }
 
     /* ---- Stat cards ---- */
-    .stat-cards { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
-    @media (max-width: 600px) { .stat-cards { grid-template-columns: 1fr; } }
+    .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 800px) { .stat-cards { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 420px) { .stat-cards { grid-template-columns: 1fr; } }
     .stat-card {
       background: #161b22; border: 1px solid #21293a; border-radius: 8px;
       padding: 1.25rem; cursor: pointer; transition: background 0.15s, border-color 0.15s;
@@ -436,6 +448,7 @@ function dashboardHtml(): string {
     .stat-card--active { background: rgba(34,211,238,0.05); border-color: #22d3ee; }
     .stat-value { font-size: 2rem; font-weight: 700; color: #e2e8f0; line-height: 1; margin-bottom: 0.4rem; }
     .stat-value--stale { color: #f87171; }
+    .stat-value--new { color: #22d3ee; }
     .stat-label { font-size: 0.82rem; color: #64748b; }
 
     /* ---- Chart ---- */
@@ -445,10 +458,16 @@ function dashboardHtml(): string {
     }
     .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
     .chart-title { font-size: 0.82rem; color: #64748b; }
-    .chart-section canvas { display: block; width: 100% !important; height: 140px !important; }
+    .chart-section canvas { display: block; width: 100% !important; height: 180px !important; }
 
     /* ---- Breakdowns ---- */
-    .breakdown-section { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    .breakdown-wrap {
+      background: #161b22; border: 1px solid #21293a; border-radius: 8px;
+      padding: 1.25rem; margin-bottom: 1.5rem;
+    }
+    .breakdown-wrap-header { margin-bottom: 0.75rem; }
+    .breakdown-wrap-title { font-size: 0.82rem; color: #64748b; }
+    .breakdown-section { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1rem; }
     @media (max-width: 700px) { .breakdown-section { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 460px) { .breakdown-section { grid-template-columns: 1fr; } }
     .breakdown-card { background: #161b22; border: 1px solid #21293a; border-radius: 8px; padding: 1rem; }
@@ -559,6 +578,10 @@ function dashboardHtml(): string {
         <div class="stat-value" id="stat-total">-</div>
         <div class="stat-label">All-time installs</div>
       </div>
+      <div class="stat-card" data-filter="new_today">
+        <div class="stat-value stat-value--new" id="stat-new">-</div>
+        <div class="stat-label">New today</div>
+      </div>
       <div class="stat-card" data-filter="stale">
         <div class="stat-value stat-value--stale" id="stat-stale">-</div>
         <div class="stat-label">Stale installs</div>
@@ -585,22 +608,27 @@ function dashboardHtml(): string {
       <canvas id="history-chart"></canvas>
     </div>
 
-    <div class="breakdown-section">
-      <div class="breakdown-card">
-        <div class="breakdown-title">Version</div>
-        <div id="breakdown-version"></div>
+    <div class="breakdown-wrap">
+      <div class="breakdown-wrap-header">
+        <span class="breakdown-wrap-title">Breakdown</span>
       </div>
-      <div class="breakdown-card">
-        <div class="breakdown-title">Architecture</div>
-        <div id="breakdown-arch"></div>
-      </div>
-      <div class="breakdown-card">
-        <div class="breakdown-title">OS</div>
-        <div id="breakdown-os"></div>
-      </div>
-      <div class="breakdown-card">
-        <div class="breakdown-title">Channel</div>
-        <div id="breakdown-channel"></div>
+      <div class="breakdown-section">
+        <div class="breakdown-card">
+          <div class="breakdown-title">Version</div>
+          <div id="breakdown-version"></div>
+        </div>
+        <div class="breakdown-card">
+          <div class="breakdown-title">Architecture</div>
+          <div id="breakdown-arch"></div>
+        </div>
+        <div class="breakdown-card">
+          <div class="breakdown-title">OS</div>
+          <div id="breakdown-os"></div>
+        </div>
+        <div class="breakdown-card">
+          <div class="breakdown-title">Channel</div>
+          <div id="breakdown-channel"></div>
+        </div>
       </div>
     </div>
 
@@ -687,6 +715,24 @@ function dashboardHtml(): string {
     } catch (e) { return dateStr || ''; }
   }
 
+  function pacificDateStr(date) {
+    try {
+      var parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).formatToParts(date);
+      var p = {};
+      parts.forEach(function (part) { p[part.type] = part.value; });
+      return p.year + '-' + p.month + '-' + p.day;
+    } catch (e) { return ''; }
+  }
+
+  function isNewToday(firstSeen) {
+    if (!firstSeen) return false;
+    try {
+      return pacificDateStr(new Date(firstSeen)) === pacificDateStr(new Date());
+    } catch (e) { return false; }
+  }
+
   function semverSort(a, b) {
     var pa = a.split('.').map(Number), pb = b.split('.').map(Number);
     for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
@@ -770,14 +816,16 @@ function dashboardHtml(): string {
 
   function renderStatCards() {
     var now = Date.now();
-    var activeCount = 0, staleCount = 0;
+    var activeCount = 0, staleCount = 0, newTodayCount = 0;
     allInstalls.forEach(function (i) {
       var ls = new Date(i.last_seen).getTime();
       if (now - ls <= ACTIVE_MS) activeCount++;
       if (now - ls >= STALE_MS) staleCount++;
+      if (isNewToday(i.first_seen)) newTodayCount++;
     });
     el('stat-active').textContent = activeCount.toLocaleString();
     el('stat-total').textContent = allInstalls.length.toLocaleString();
+    el('stat-new').textContent = newTodayCount.toLocaleString();
     el('stat-stale').textContent = staleCount.toLocaleString();
     document.querySelectorAll('.stat-card').forEach(function (card) {
       card.classList.toggle('stat-card--active', card.dataset.filter === cardFilter);
@@ -786,7 +834,10 @@ function dashboardHtml(): string {
 
   function renderChart() {
     var windowLabel = windowDays === 1 ? 'last 24h' : 'last ' + windowDays + 'd';
-    var cardLabel = cardFilter === 'all' ? 'All installs' : cardFilter === 'stale' ? 'Stale installs' : 'Active installs';
+    var cardLabel = cardFilter === 'all' ? 'All installs'
+      : cardFilter === 'stale' ? 'Stale installs'
+      : cardFilter === 'new_today' ? 'New installs'
+      : 'Active installs';
     el('chart-title').textContent = cardLabel + ' - ' + windowLabel;
 
     var canvas = el('history-chart');
@@ -795,7 +846,7 @@ function dashboardHtml(): string {
 
     var labels = [], chartData = [];
     var nowTs = Date.now();
-    var i, cnt, ls;
+    var i, cnt, ls, fs;
 
     if (windowDays === 1) {
       for (var h = 23; h >= 0; h--) {
@@ -808,6 +859,9 @@ function dashboardHtml(): string {
             if (hEndMs - ls >= STALE_MS) cnt++;
           } else if (cardFilter === 'all') {
             if (ls >= hStartMs && ls < hEndMs) cnt++;
+          } else if (cardFilter === 'new_today') {
+            fs = allInstalls[i].first_seen;
+            if (fs) { var fsMs = new Date(fs).getTime(); if (fsMs >= hStartMs && fsMs < hEndMs) cnt++; }
           } else {
             if (hEndMs - ls <= ACTIVE_MS && ls < hEndMs) cnt++;
           }
@@ -830,11 +884,15 @@ function dashboardHtml(): string {
     } else {
       for (var dj = windowDays - 1; dj >= 0; dj--) {
         var dayEndMs = nowTs - dj * 86400000;
+        var dayStartMs = dayEndMs - 86400000;
         cnt = 0;
         for (i = 0; i < allInstalls.length; i++) {
           ls = new Date(allInstalls[i].last_seen).getTime();
           if (cardFilter === 'stale') {
             if (dayEndMs - ls >= STALE_MS) cnt++;
+          } else if (cardFilter === 'new_today') {
+            fs = allInstalls[i].first_seen;
+            if (fs) { var fsDayMs = new Date(fs).getTime(); if (fsDayMs >= dayStartMs && fsDayMs < dayEndMs) cnt++; }
           } else {
             if (dayEndMs - ls <= ACTIVE_MS && ls < dayEndMs) cnt++;
           }
@@ -846,11 +904,15 @@ function dashboardHtml(): string {
 
     var nonNull = chartData.filter(function (v) { return v !== null; });
     var dataMax = nonNull.length > 0 ? Math.max.apply(null, nonNull) : 0;
+    var dataMin = nonNull.length > 0 ? Math.min.apply(null, nonNull) : 0;
     var yStep = dataMax <= 5 ? 1 : dataMax <= 20 ? 5 : 10;
+    var beginAtZero = dataMax === 0 || dataMin === 0 || (dataMax > 0 && dataMin / dataMax < 0.2);
 
-    var gradient = ctx.createLinearGradient(0, 0, 0, 140);
+    var gradient = ctx.createLinearGradient(0, 0, 0, 180);
     gradient.addColorStop(0, 'rgba(34,211,238,0.18)');
     gradient.addColorStop(1, 'rgba(34,211,238,0)');
+
+    var tooltipNoun = cardFilter === 'stale' ? 'stale' : 'installs';
 
     histChart = new Chart(ctx, {
       type: 'line',
@@ -868,13 +930,13 @@ function dashboardHtml(): string {
           legend: { display: false },
           tooltip: {
             backgroundColor: '#1c2230', borderColor: '#21293a', borderWidth: 1,
-            titleColor: '#64748b', bodyColor: '#22d3ee',
-            callbacks: { label: function (c) { return ' ' + (c.parsed.y !== null ? c.parsed.y : '-') + ' installs'; } }
+            titleColor: '#64748b', bodyColor: '#e2e8f0',
+            callbacks: { label: function (c) { return ' ' + (c.parsed.y !== null ? c.parsed.y : '-') + ' ' + tooltipNoun; } }
           }
         },
         scales: {
           x: { grid: { color: '#21293a' }, ticks: { color: '#64748b', maxTicksLimit: 10, font: { size: 11 } } },
-          y: { grid: { color: '#21293a' }, ticks: { color: '#64748b', font: { size: 11 }, stepSize: yStep, precision: 0 }, beginAtZero: true }
+          y: { grid: { color: '#21293a' }, ticks: { color: '#64748b', font: { size: 11 }, stepSize: yStep, precision: 0 }, beginAtZero: beginAtZero }
         }
       }
     });
@@ -922,6 +984,8 @@ function dashboardHtml(): string {
       base = allInstalls.filter(function (i) { return now - new Date(i.last_seen).getTime() <= ACTIVE_MS; });
     } else if (cardFilter === 'stale') {
       base = allInstalls.filter(function (i) { return now - new Date(i.last_seen).getTime() >= STALE_MS; });
+    } else if (cardFilter === 'new_today') {
+      base = allInstalls.filter(function (i) { return isNewToday(i.first_seen); });
     } else {
       base = allInstalls.slice();
     }
@@ -939,8 +1003,8 @@ function dashboardHtml(): string {
     el('details-count').textContent = filtered.length;
 
     var pillWrap = el('card-filter-pill');
-    if (cardFilter === 'active' || cardFilter === 'stale') {
-      var pillLabel = cardFilter === 'active' ? 'Active (36h)' : 'Stale (3d+)';
+    if (cardFilter === 'active' || cardFilter === 'stale' || cardFilter === 'new_today') {
+      var pillLabel = cardFilter === 'active' ? 'Active (36h)' : cardFilter === 'stale' ? 'Stale (3d+)' : 'New today';
       pillWrap.style.display = 'block';
       pillWrap.innerHTML = '<span class="filter-pill">' + esc(pillLabel) +
         ' <button class="pill-dismiss" id="dismiss-card-filter"><i class="ti ti-x"></i></button></span>';
