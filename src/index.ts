@@ -517,12 +517,19 @@ function dashboardHtml(): string {
 
     /* ---- Install table ---- */
     .install-table-wrap { overflow-x: auto; }
-    .install-table { width: 100%; table-layout: auto; border-collapse: collapse; }
+    .install-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
     .install-table th {
       font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
       color: #64748b; padding: 0 0.6rem 0.6rem; text-align: left; font-weight: 500;
       white-space: nowrap; border-bottom: 1px solid #21293a;
+      position: relative; overflow: hidden;
     }
+    .th-resize-handle {
+      position: absolute; top: 0; right: 0; width: 2px; height: 100%;
+      cursor: col-resize; background: #21293a; z-index: 1;
+    }
+    .th-resize-handle:hover, .th-resize-handle.dragging { background: #22d3ee; }
+    @media (max-width: 640px) { .th-resize-handle { display: none; } }
     .install-table th.th-sortable { cursor: pointer; user-select: none; }
     .install-table th.th-sortable:hover { color: #94a3b8; }
     .install-table th.col-chevron { width: 32px; padding-right: 0; }
@@ -695,6 +702,16 @@ function dashboardHtml(): string {
         </div>
         <div class="install-table-wrap">
           <table class="install-table">
+            <colgroup id="install-colgroup">
+              <col style="width:32px">
+              <col style="width:120px">
+              <col style="width:80px">
+              <col style="width:80px">
+              <col style="width:80px">
+              <col style="width:90px">
+              <col style="width:120px">
+              <col style="width:120px">
+            </colgroup>
             <thead><tr id="install-thead"></tr></thead>
             <tbody id="install-tbody"></tbody>
           </table>
@@ -723,7 +740,9 @@ function dashboardHtml(): string {
   var sortCol = 'first_seen';
   var sortDir = 'desc';
 
-  var ACTIVE_MS = 26 * 3600000;
+  var ACTIVE_MS = 36 * 3600000;
+  var MIN_COL_WIDTH = 48;
+  var colWidths = [32, 120, 80, 80, 80, 90, 120, 120];
 
   function el(id) { return document.getElementById(id); }
 
@@ -1040,7 +1059,7 @@ function dashboardHtml(): string {
 
     var pillWrap = el('card-filter-pill');
     if (cardFilter === 'active' || cardFilter === 'stale' || cardFilter === 'new_today') {
-      var pillLabel = cardFilter === 'active' ? 'Active (26h)' : cardFilter === 'stale' ? 'Stale' : 'New today';
+      var pillLabel = cardFilter === 'active' ? 'Active (36h)' : cardFilter === 'stale' ? 'Stale' : 'New today';
       pillWrap.style.display = 'block';
       pillWrap.innerHTML = '<span class="filter-pill">' + esc(pillLabel) +
         ' <button class="pill-dismiss" id="dismiss-card-filter"><i class="ti ti-x"></i></button></span>';
@@ -1168,6 +1187,10 @@ function dashboardHtml(): string {
       });
     });
 
+    var cgCols = el('install-colgroup').querySelectorAll('col');
+    colWidths.forEach(function (w, i) { if (cgCols[i]) cgCols[i].style.width = w + 'px'; });
+    attachResizeHandles();
+
     if (total === 0) {
       tbody.innerHTML = '<tr><td colspan="8" class="empty-row">No installs match the current filters.</td></tr>';
       paginationBar.innerHTML = '';
@@ -1247,6 +1270,35 @@ function dashboardHtml(): string {
         var id = row.dataset.id;
         expandedInstallId = expandedInstallId === id ? null : id;
         renderInstallTable(currentFiltered);
+      });
+    });
+  }
+
+  function attachResizeHandles() {
+    var ths = el('install-thead').querySelectorAll('th');
+    var cgCols = el('install-colgroup').querySelectorAll('col');
+    ths.forEach(function (th, idx) {
+      var handle = document.createElement('span');
+      handle.className = 'th-resize-handle';
+      th.appendChild(handle);
+      handle.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var startX = e.clientX;
+        var startW = colWidths[idx];
+        handle.classList.add('dragging');
+        function onMove(e) {
+          var newW = Math.max(MIN_COL_WIDTH, startW + e.clientX - startX);
+          colWidths[idx] = newW;
+          if (cgCols[idx]) cgCols[idx].style.width = newW + 'px';
+        }
+        function onUp() {
+          handle.classList.remove('dragging');
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
       });
     });
   }
