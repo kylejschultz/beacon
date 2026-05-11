@@ -541,6 +541,13 @@ function dashboardHtml(): string {
     .detail-val { font-size: 0.82rem; color: #e2e8f0; word-break: break-all; overflow-wrap: anywhere; }
     .detail-mono { font-family: monospace; font-size: 0.76rem; }
     .empty-row { font-size: 0.85rem; color: #64748b; padding: 1rem 0; }
+    .chip-pfx { color: #64748b; font-weight: 400; }
+    .first-seen-pfx { color: #64748b; }
+    .pagination { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0 0; justify-content: center; }
+    .pagination-btn { display: inline-flex; align-items: center; background: transparent; border: 1px solid #21293a; color: #64748b; border-radius: 20px; padding: 0.3rem 0.75rem; font-size: 0.82rem; cursor: pointer; }
+    .pagination-btn:hover:not([disabled]) { border-color: #475569; color: #e2e8f0; }
+    .pagination-btn[disabled] { opacity: 0.4; cursor: default; }
+    .pagination-info { font-size: 0.82rem; color: #64748b; }
   </style>
 </head>
 <body>
@@ -667,8 +674,21 @@ function dashboardHtml(): string {
             </button>
             <div class="dropdown-menu hidden" id="filter-channel-menu"></div>
           </div>
+          <div class="dropdown-wrap">
+            <button class="dropdown-btn" id="filter-perpage">
+              <span class="dropdown-btn-label">Per page: 10</span>
+              <i class="ti ti-chevron-down"></i>
+            </button>
+            <div class="dropdown-menu hidden" id="filter-perpage-menu">
+              <div class="dropdown-item active" data-value="10">10</div>
+              <div class="dropdown-item" data-value="25">25</div>
+              <div class="dropdown-item" data-value="50">50</div>
+              <div class="dropdown-item" data-value="all">All</div>
+            </div>
+          </div>
         </div>
         <div id="install-rows"></div>
+        <div id="pagination-bar"></div>
       </div>
     </div>
   </main>
@@ -685,6 +705,9 @@ function dashboardHtml(): string {
   var cardFilter = null;
   var detailFilters = { version: null, arch: null, os: null, channel: null };
   var expandedInstallId = null;
+  var currentPage = 1;
+  var pageSize = 10;
+  var currentFiltered = [];
   var histChart = null;
 
   var ACTIVE_MS = 36 * 3600000;
@@ -990,6 +1013,12 @@ function dashboardHtml(): string {
       base = allInstalls.slice();
     }
 
+    base.sort(function (a, b) {
+      var aFs = a.first_seen ? new Date(a.first_seen).getTime() : 0;
+      var bFs = b.first_seen ? new Date(b.first_seen).getTime() : 0;
+      return bFs - aFs;
+    });
+
     var filtered = base.filter(function (i) {
       if (detailFilters.version && i.version !== detailFilters.version) return false;
       if (detailFilters.arch && i.arch !== detailFilters.arch) return false;
@@ -1000,6 +1029,7 @@ function dashboardHtml(): string {
       return true;
     });
 
+    currentFiltered = filtered;
     el('details-count').textContent = filtered.length;
 
     var pillWrap = el('card-filter-pill');
@@ -1011,6 +1041,7 @@ function dashboardHtml(): string {
       el('dismiss-card-filter').addEventListener('click', function (e) {
         e.stopPropagation();
         cardFilter = null;
+        currentPage = 1;
         render();
       });
     } else {
@@ -1049,6 +1080,7 @@ function dashboardHtml(): string {
     menu.querySelectorAll('.dropdown-item').forEach(function (item) {
       item.addEventListener('click', function () {
         detailFilters[field] = item.dataset.value || null;
+        currentPage = 1;
         closeDropdowns();
         renderInstallDetails();
       });
@@ -1057,23 +1089,59 @@ function dashboardHtml(): string {
 
   function renderInstallRows(installs) {
     var container = el('install-rows');
-    if (installs.length === 0) {
+    var paginationBar = el('pagination-bar');
+    var total = installs.length;
+
+    if (total === 0) {
       container.innerHTML = '<div class="empty-row">No installs match the current filters.</div>';
+      paginationBar.innerHTML = '';
       return;
     }
-    container.innerHTML = installs.map(function (i) {
-      var shortId = i.install_id ? (i.install_id.slice(0, 8) + '…') : 'unknown';
+
+    var pageInstalls;
+    if (pageSize === 'all') {
+      pageInstalls = installs;
+      paginationBar.innerHTML = '';
+    } else {
+      var totalPages = Math.ceil(total / pageSize);
+      if (currentPage > totalPages) currentPage = totalPages;
+      var start = (currentPage - 1) * pageSize;
+      pageInstalls = installs.slice(start, start + pageSize);
+      paginationBar.innerHTML =
+        '<div class="pagination">' +
+        '<button class="pagination-btn" id="prev-page"' + (currentPage <= 1 ? ' disabled' : '') + '>Prev</button>' +
+        '<span class="pagination-info">Page ' + currentPage + ' of ' + totalPages + '</span>' +
+        '<button class="pagination-btn" id="next-page"' + (currentPage >= totalPages ? ' disabled' : '') + '>Next</button>' +
+        '</div>';
+      if (currentPage > 1) {
+        el('prev-page').addEventListener('click', function () {
+          currentPage--;
+          renderInstallRows(currentFiltered);
+        });
+      }
+      if (currentPage < totalPages) {
+        el('next-page').addEventListener('click', function () {
+          currentPage++;
+          renderInstallRows(currentFiltered);
+        });
+      }
+    }
+
+    container.innerHTML = pageInstalls.map(function (i) {
+      var shortId = i.install_id ? (i.install_id.slice(0, 8) + '...') : 'unknown';
       var osLabel = (i.os != null && i.os !== '') ? i.os : '-';
       var chanVal = (i.channel != null && i.channel !== '') ? i.channel : null;
       var chanLabel = chanVal || '-';
-      var osClass = osLabel === 'Darwin' ? 'chip--purple' : 'chip--indigo';
-      var chanClass = chanVal === 'stable' ? 'chip--cyan' : chanVal ? 'chip--amber' : 'chip--neutral';
       var isExpanded = expandedInstallId === i.install_id;
+      var firstSeenRel = i.first_seen ? relTime(i.first_seen) : '-';
 
-      var chips = '<span class="chip ' + osClass + '">' + esc(osLabel) + '</span>' +
-        '<span class="chip ' + chanClass + '">' + esc(chanLabel) + '</span>' +
-        '<span class="chip chip--neutral">' + esc(i.arch || 'unknown') + '</span>';
-      if (i.container_count != null) chips += '<span class="chip chip--neutral">' + i.container_count + '</span>';
+      var chips =
+        '<span class="chip chip--neutral"><span class="chip-pfx">os: </span>' + esc(osLabel) + '</span>' +
+        '<span class="chip chip--neutral"><span class="chip-pfx">arch: </span>' + esc(i.arch || 'unknown') + '</span>' +
+        '<span class="chip chip--cyan">v' + esc(i.version || '?') + '</span>';
+      if (i.container_count != null) {
+        chips += '<span class="chip chip--neutral">' + i.container_count + ' containers</span>';
+      }
 
       var panel = '';
       if (isExpanded) {
@@ -1083,8 +1151,9 @@ function dashboardHtml(): string {
           '<div class="detail-field"><span class="detail-key">arch</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">os</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">channel</span><span class="detail-val">' + esc(chanLabel) + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">containers</span><span class="detail-val">' + (i.container_count != null ? i.container_count : '-') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">container_count</span><span class="detail-val">' + (i.container_count != null ? i.container_count : '-') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">first_seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
           '</div></div>';
       }
@@ -1093,7 +1162,7 @@ function dashboardHtml(): string {
         '<div class="install-row-main">' +
         '<span class="install-id">' + esc(shortId) + '</span>' +
         '<div class="install-chips">' + chips + '</div>' +
-        '<div class="install-right"><span class="install-version">' + esc(i.version || '') + '</span><span class="install-time">' + esc(relTime(i.last_seen)) + '</span></div>' +
+        '<div class="install-right"><span class="install-time"><span class="first-seen-pfx">First seen </span>' + esc(firstSeenRel) + '</span></div>' +
         '</div>' + panel + '</div>';
     }).join('');
 
@@ -1101,7 +1170,7 @@ function dashboardHtml(): string {
       row.querySelector('.install-row-main').addEventListener('click', function () {
         var id = row.dataset.id;
         expandedInstallId = expandedInstallId === id ? null : id;
-        renderInstallRows(installs);
+        renderInstallRows(currentFiltered);
       });
     });
   }
@@ -1133,13 +1202,28 @@ function dashboardHtml(): string {
     });
   });
 
-  ['filter-version', 'filter-arch', 'filter-os', 'filter-channel'].forEach(function (id) {
+  ['filter-version', 'filter-arch', 'filter-os', 'filter-channel', 'filter-perpage'].forEach(function (id) {
     el(id).addEventListener('click', function (e) {
       e.stopPropagation();
       var menu = el(id + '-menu');
       var wasOpen = !menu.classList.contains('hidden');
       closeDropdowns();
       if (!wasOpen) menu.classList.remove('hidden');
+    });
+  });
+
+  el('filter-perpage-menu').querySelectorAll('.dropdown-item').forEach(function (item) {
+    item.addEventListener('click', function () {
+      var val = item.dataset.value;
+      pageSize = val === 'all' ? 'all' : parseInt(val, 10);
+      currentPage = 1;
+      var label = val === 'all' ? 'All' : val;
+      el('filter-perpage').querySelector('.dropdown-btn-label').textContent = 'Per page: ' + label;
+      el('filter-perpage-menu').querySelectorAll('.dropdown-item').forEach(function (it) {
+        it.classList.toggle('active', it.dataset.value === val);
+      });
+      closeDropdowns();
+      renderInstallRows(currentFiltered);
     });
   });
 
@@ -1156,6 +1240,7 @@ function dashboardHtml(): string {
           el('details-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
         }, 50);
       }
+      currentPage = 1;
       render();
     });
   });
