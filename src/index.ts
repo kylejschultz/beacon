@@ -397,7 +397,7 @@ function dashboardHtml(): string {
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"><\/script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0d1117; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; }
+    body { background: #0d1117; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; overflow-x: hidden; }
 
     /* ---- Login ---- */
     #login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -515,39 +515,45 @@ function dashboardHtml(): string {
     .dropdown-item:hover { background: rgba(34,211,238,0.06); color: #22d3ee; }
     .dropdown-item.active { color: #22d3ee; }
 
-    /* ---- Install rows ---- */
-    #install-rows { display: flex; flex-direction: column; }
-    .install-row { border-top: 1px solid #21293a; cursor: pointer; }
-    .install-row:first-child { border-top: none; }
-    .install-row-main { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0; }
-    .install-row:hover .install-row-main { background: rgba(255,255,255,0.02); }
-    .install-row--expanded .install-row-main { background: rgba(34,211,238,0.03); }
-    .install-id { font-family: monospace; font-size: 0.85rem; color: #22d3ee; flex-shrink: 0; width: 84px; }
-    .install-chips { display: flex; gap: 0.35rem; flex-wrap: wrap; flex: 1; }
-    .chip { display: inline-flex; align-items: center; font-size: 0.72rem; padding: 0.15rem 0.45rem; border-radius: 4px; font-weight: 500; }
-    .chip--indigo { background: rgba(99,102,241,0.15); color: #a5b4fc; }
-    .chip--purple { background: rgba(168,85,247,0.15); color: #d8b4fe; }
-    .chip--cyan { background: rgba(34,211,238,0.12); color: #67e8f9; }
-    .chip--amber { background: rgba(251,191,36,0.12); color: #fde68a; }
-    .chip--neutral { background: rgba(100,116,139,0.15); color: #94a3b8; }
-    .install-right { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
-    .install-version { font-size: 0.82rem; color: #e2e8f0; }
-    .install-time { font-size: 0.75rem; color: #64748b; }
-    .install-detail-panel { background: #1c2230; border-top: 1px solid #21293a; padding: 0.85rem 0; }
+    /* ---- Install table ---- */
+    .install-table-wrap { overflow-x: auto; }
+    .install-table { width: 100%; table-layout: auto; border-collapse: collapse; }
+    .install-table th {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+      color: #64748b; padding: 0 0.6rem 0.6rem; text-align: left; font-weight: 500;
+      white-space: nowrap; border-bottom: 1px solid #21293a;
+    }
+    .install-table th.th-sortable { cursor: pointer; user-select: none; }
+    .install-table th.th-sortable:hover { color: #94a3b8; }
+    .install-table th.col-chevron { width: 32px; padding-right: 0; }
+    .sort-active { color: #22d3ee; }
+    .sort-inactive { opacity: 0.3; font-size: 0.8em; }
+    .install-table td {
+      padding: 0.7rem 0.6rem; border-top: 1px solid #21293a;
+      font-size: 0.85rem; color: #e2e8f0; white-space: nowrap;
+    }
+    .install-table td.col-chevron { color: #64748b; font-size: 0.7rem; text-align: center; padding-right: 0; }
+    .install-table tbody tr.install-data-row { cursor: pointer; }
+    .install-table tbody tr.install-data-row:hover td { background: rgba(255,255,255,0.02); }
+    .install-table tbody tr.row-expanded td { background: rgba(34,211,238,0.03); }
+    .install-table tbody tr.install-detail-row > td { padding: 0; cursor: default; background: none !important; border-top: none; }
+    .install-id-cell { font-family: monospace; font-size: 0.85rem; color: #22d3ee; }
+    .install-detail-panel { background: #1c2230; border-top: 1px solid #21293a; padding: 0.85rem 1rem; }
     .detail-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem 1rem; }
     @media (max-width: 640px) { .detail-grid { grid-template-columns: 1fr 1fr; } }
     .detail-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
     .detail-key { font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
     .detail-val { font-size: 0.82rem; color: #e2e8f0; word-break: break-all; overflow-wrap: anywhere; }
     .detail-mono { font-family: monospace; font-size: 0.76rem; }
-    .empty-row { font-size: 0.85rem; color: #64748b; padding: 1rem 0; }
-    .chip-pfx { color: #64748b; font-weight: 400; }
-    .first-seen-pfx { color: #64748b; }
+    .empty-row { font-size: 0.85rem; color: #64748b; padding: 1rem 0.6rem; }
     .pagination { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0 0; justify-content: center; }
     .pagination-btn { display: inline-flex; align-items: center; background: transparent; border: 1px solid #21293a; color: #64748b; border-radius: 20px; padding: 0.3rem 0.75rem; font-size: 0.82rem; cursor: pointer; }
     .pagination-btn:hover:not([disabled]) { border-color: #475569; color: #e2e8f0; }
     .pagination-btn[disabled] { opacity: 0.4; cursor: default; }
     .pagination-info { font-size: 0.82rem; color: #64748b; }
+    @media (max-width: 640px) {
+      .col-os, .col-arch, .col-containers, .col-lastseen { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -687,7 +693,12 @@ function dashboardHtml(): string {
             </div>
           </div>
         </div>
-        <div id="install-rows"></div>
+        <div class="install-table-wrap">
+          <table class="install-table">
+            <thead><tr id="install-thead"></tr></thead>
+            <tbody id="install-tbody"></tbody>
+          </table>
+        </div>
         <div id="pagination-bar"></div>
       </div>
     </div>
@@ -709,6 +720,8 @@ function dashboardHtml(): string {
   var pageSize = 10;
   var currentFiltered = [];
   var histChart = null;
+  var sortCol = 'first_seen';
+  var sortDir = 'desc';
 
   var ACTIVE_MS = 36 * 3600000;
   var STALE_MS = 3 * 86400000;
@@ -1013,12 +1026,6 @@ function dashboardHtml(): string {
       base = allInstalls.slice();
     }
 
-    base.sort(function (a, b) {
-      var aFs = a.first_seen ? new Date(a.first_seen).getTime() : 0;
-      var bFs = b.first_seen ? new Date(b.first_seen).getTime() : 0;
-      return bFs - aFs;
-    });
-
     var filtered = base.filter(function (i) {
       if (detailFilters.version && i.version !== detailFilters.version) return false;
       if (detailFilters.arch && i.arch !== detailFilters.arch) return false;
@@ -1053,7 +1060,7 @@ function dashboardHtml(): string {
     populateDropdown('filter-arch', 'arch', base);
     populateDropdown('filter-os', 'os', base);
     populateDropdown('filter-channel', 'channel', base);
-    renderInstallRows(filtered);
+    renderInstallTable(filtered);
   }
 
   function populateDropdown(btnId, field, base) {
@@ -1087,26 +1094,97 @@ function dashboardHtml(): string {
     });
   }
 
-  function renderInstallRows(installs) {
-    var container = el('install-rows');
+  function sortInstalls(arr) {
+    return arr.slice().sort(function (a, b) {
+      var av, bv, cmp;
+      if (sortCol === 'version') {
+        cmp = semverSort(a.version || '0', b.version || '0');
+        return sortDir === 'asc' ? -cmp : cmp;
+      }
+      if (sortCol === 'container_count') {
+        av = a.container_count != null ? a.container_count : -1;
+        bv = b.container_count != null ? b.container_count : -1;
+        return sortDir === 'asc' ? av - bv : bv - av;
+      }
+      if (sortCol === 'first_seen') {
+        av = a.first_seen ? new Date(a.first_seen).getTime() : 0;
+        bv = b.first_seen ? new Date(b.first_seen).getTime() : 0;
+        return sortDir === 'asc' ? av - bv : bv - av;
+      }
+      if (sortCol === 'last_seen') {
+        av = new Date(a.last_seen).getTime();
+        bv = new Date(b.last_seen).getTime();
+        return sortDir === 'asc' ? av - bv : bv - av;
+      }
+      av = ((a[sortCol] != null && a[sortCol] !== '') ? String(a[sortCol]) : '-').toLowerCase();
+      bv = ((b[sortCol] != null && b[sortCol] !== '') ? String(b[sortCol]) : '-').toLowerCase();
+      cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }
+
+  function renderInstallTable(installs) {
+    var thead = el('install-thead');
+    var tbody = el('install-tbody');
     var paginationBar = el('pagination-bar');
     var total = installs.length;
 
+    var cols = [
+      { key: null, label: '', cls: 'col-chevron', sortable: false },
+      { key: null, label: 'Install ID', cls: 'col-installid', sortable: false },
+      { key: 'os', label: 'OS', cls: 'col-os', sortable: true },
+      { key: 'arch', label: 'Arch', cls: 'col-arch', sortable: true },
+      { key: 'version', label: 'Version', cls: 'col-version', sortable: true },
+      { key: 'container_count', label: 'Containers', cls: 'col-containers', sortable: true, align: 'right' },
+      { key: 'first_seen', label: 'First Seen', cls: 'col-firstseen', sortable: true },
+      { key: 'last_seen', label: 'Last Seen', cls: 'col-lastseen', sortable: true }
+    ];
+
+    thead.innerHTML = cols.map(function (col) {
+      var indicator = '';
+      if (col.sortable) {
+        if (sortCol === col.key) {
+          indicator = '<span class="sort-active">' + (sortDir === 'asc' ? ' ▲' : ' ▼') + '</span>';
+        } else {
+          indicator = '<span class="sort-inactive"> ⇅</span>';
+        }
+      }
+      var style = col.align === 'right' ? ' style="text-align:right"' : '';
+      var thCls = (col.sortable ? 'th-sortable' : 'th-plain') + ' ' + col.cls;
+      var dataAttr = col.sortable ? ' data-sort="' + col.key + '"' : '';
+      return '<th class="' + thCls + '"' + dataAttr + style + '>' + esc(col.label) + indicator + '</th>';
+    }).join('');
+
+    thead.querySelectorAll('[data-sort]').forEach(function (th) {
+      th.addEventListener('click', function () {
+        var col = th.dataset.sort;
+        if (sortCol === col) {
+          sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortCol = col;
+          sortDir = 'asc';
+        }
+        currentPage = 1;
+        renderInstallTable(currentFiltered);
+      });
+    });
+
     if (total === 0) {
-      container.innerHTML = '<div class="empty-row">No installs match the current filters.</div>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-row">No installs match the current filters.</td></tr>';
       paginationBar.innerHTML = '';
       return;
     }
 
-    var pageInstalls;
+    var sorted = sortInstalls(installs);
+    var pageRows;
     if (pageSize === 'all') {
-      pageInstalls = installs;
+      pageRows = sorted;
       paginationBar.innerHTML = '';
     } else {
       var totalPages = Math.ceil(total / pageSize);
       if (currentPage > totalPages) currentPage = totalPages;
       var start = (currentPage - 1) * pageSize;
-      pageInstalls = installs.slice(start, start + pageSize);
+      pageRows = sorted.slice(start, start + pageSize);
       paginationBar.innerHTML =
         '<div class="pagination">' +
         '<button class="pagination-btn" id="prev-page"' + (currentPage <= 1 ? ' disabled' : '') + '>Prev</button>' +
@@ -1116,36 +1194,40 @@ function dashboardHtml(): string {
       if (currentPage > 1) {
         el('prev-page').addEventListener('click', function () {
           currentPage--;
-          renderInstallRows(currentFiltered);
+          renderInstallTable(currentFiltered);
         });
       }
       if (currentPage < totalPages) {
         el('next-page').addEventListener('click', function () {
           currentPage++;
-          renderInstallRows(currentFiltered);
+          renderInstallTable(currentFiltered);
         });
       }
     }
 
-    container.innerHTML = pageInstalls.map(function (i) {
+    tbody.innerHTML = pageRows.map(function (i) {
       var shortId = i.install_id ? (i.install_id.slice(0, 8) + '...') : 'unknown';
       var osLabel = (i.os != null && i.os !== '') ? i.os : '-';
-      var chanVal = (i.channel != null && i.channel !== '') ? i.channel : null;
-      var chanLabel = chanVal || '-';
+      var chanLabel = (i.channel != null && i.channel !== '') ? i.channel : '-';
       var isExpanded = expandedInstallId === i.install_id;
       var firstSeenRel = i.first_seen ? relTime(i.first_seen) : '-';
+      var lastSeenRel = i.last_seen ? relTime(i.last_seen) : '-';
+      var containers = i.container_count != null ? i.container_count : '-';
 
-      var chips =
-        '<span class="chip chip--neutral"><span class="chip-pfx">os: </span>' + esc(osLabel) + '</span>' +
-        '<span class="chip chip--neutral"><span class="chip-pfx">arch: </span>' + esc(i.arch || 'unknown') + '</span>' +
-        '<span class="chip chip--cyan">v' + esc(i.version || '?') + '</span>';
-      if (i.container_count != null) {
-        chips += '<span class="chip chip--neutral">' + i.container_count + ' containers</span>';
-      }
+      var dataRow = '<tr class="install-data-row' + (isExpanded ? ' row-expanded' : '') + '" data-id="' + esc(i.install_id || '') + '">' +
+        '<td class="col-chevron">' + (isExpanded ? '▼' : '▶') + '</td>' +
+        '<td class="col-installid install-id-cell">' + esc(shortId) + '</td>' +
+        '<td class="col-os">' + esc(osLabel) + '</td>' +
+        '<td class="col-arch">' + esc(i.arch || '-') + '</td>' +
+        '<td class="col-version">' + esc(i.version || '-') + '</td>' +
+        '<td class="col-containers" style="text-align:right">' + esc(String(containers)) + '</td>' +
+        '<td class="col-firstseen">' + esc(firstSeenRel) + '</td>' +
+        '<td class="col-lastseen">' + esc(lastSeenRel) + '</td>' +
+        '</tr>';
 
-      var panel = '';
+      var detailRow = '';
       if (isExpanded) {
-        panel = '<div class="install-detail-panel"><div class="detail-grid">' +
+        detailRow = '<tr class="install-detail-row"><td colspan="8"><div class="install-detail-panel"><div class="detail-grid">' +
           '<div class="detail-field"><span class="detail-key">install_id</span><span class="detail-val detail-mono">' + esc(i.install_id || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">arch</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
@@ -1155,22 +1237,17 @@ function dashboardHtml(): string {
           '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">first_seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
-          '</div></div>';
+          '</div></div></td></tr>';
       }
 
-      return '<div class="install-row' + (isExpanded ? ' install-row--expanded' : '') + '" data-id="' + esc(i.install_id || '') + '">' +
-        '<div class="install-row-main">' +
-        '<span class="install-id">' + esc(shortId) + '</span>' +
-        '<div class="install-chips">' + chips + '</div>' +
-        '<div class="install-right"><span class="install-time"><span class="first-seen-pfx">First seen </span>' + esc(firstSeenRel) + '</span></div>' +
-        '</div>' + panel + '</div>';
+      return dataRow + detailRow;
     }).join('');
 
-    container.querySelectorAll('.install-row').forEach(function (row) {
-      row.querySelector('.install-row-main').addEventListener('click', function () {
+    tbody.querySelectorAll('.install-data-row').forEach(function (row) {
+      row.addEventListener('click', function () {
         var id = row.dataset.id;
         expandedInstallId = expandedInstallId === id ? null : id;
-        renderInstallRows(currentFiltered);
+        renderInstallTable(currentFiltered);
       });
     });
   }
@@ -1223,7 +1300,7 @@ function dashboardHtml(): string {
         it.classList.toggle('active', it.dataset.value === val);
       });
       closeDropdowns();
-      renderInstallRows(currentFiltered);
+      renderInstallTable(currentFiltered);
     });
   });
 
