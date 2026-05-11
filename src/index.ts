@@ -485,15 +485,15 @@ function dashboardHtml(): string {
     #details-body { padding: 0 1.25rem 1.25rem; }
 
     /* ---- Filter bar ---- */
-    .filter-bar { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
-    .card-filter-pill-wrap { margin-bottom: 0.75rem; }
-    .filter-pill {
-      display: inline-flex; align-items: center; gap: 0.4rem;
-      background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.2);
-      color: #22d3ee; border-radius: 20px; padding: 0.25rem 0.65rem; font-size: 0.82rem;
+    .filter-bar { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
+    .filter-selector-group { display: inline-flex; gap: 0.25rem; flex-wrap: wrap; }
+    .fs-btn {
+      display: inline-flex; align-items: center;
+      background: transparent; border: 1px solid #21293a; color: #64748b;
+      border-radius: 20px; padding: 0.3rem 0.7rem; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
     }
-    .pill-dismiss { background: none; border: none; color: #22d3ee; cursor: pointer; padding: 0; font-size: 0.8rem; line-height: 1; opacity: 0.7; display: inline-flex; align-items: center; }
-    .pill-dismiss:hover { opacity: 1; }
+    .fs-btn:hover { border-color: #475569; color: #94a3b8; }
+    .fs-btn--active { border-color: #22d3ee; color: #22d3ee; background: rgba(34,211,238,0.08); }
 
     /* ---- Custom dropdowns ---- */
     .dropdown-wrap { position: relative; }
@@ -559,7 +559,7 @@ function dashboardHtml(): string {
     .pagination-btn[disabled] { opacity: 0.4; cursor: default; }
     .pagination-info { font-size: 0.82rem; color: #64748b; }
     @media (max-width: 640px) {
-      .col-os, .col-arch, .col-containers, .col-lastseen { display: none; }
+      .col-os, .col-arch, .col-lastseen { display: none; }
     }
   </style>
 </head>
@@ -657,8 +657,13 @@ function dashboardHtml(): string {
         <span>Install details (<span id="details-count">0</span>)</span>
       </div>
       <div id="details-body">
-        <div id="card-filter-pill" class="card-filter-pill-wrap" style="display:none"></div>
         <div class="filter-bar">
+          <div class="filter-selector-group" id="filter-selector">
+            <button class="fs-btn fs-btn--active" data-filter-opt="all">All installs</button>
+            <button class="fs-btn" data-filter-opt="active">Active (36h)</button>
+            <button class="fs-btn" data-filter-opt="new_today">New today</button>
+            <button class="fs-btn" data-filter-opt="stale">Stale</button>
+          </div>
           <div class="dropdown-wrap">
             <button class="dropdown-btn" id="filter-version">
               <span class="dropdown-btn-label">Version</span>
@@ -708,7 +713,6 @@ function dashboardHtml(): string {
               <col style="width:80px">
               <col style="width:80px">
               <col style="width:80px">
-              <col style="width:90px">
               <col style="width:120px">
               <col style="width:120px">
             </colgroup>
@@ -730,7 +734,7 @@ function dashboardHtml(): string {
   var validWindows = [1, 7, 14, 30, 90];
   var storedWindow = parseInt(localStorage.getItem('beacon_window_days') || '1', 10);
   var windowDays = validWindows.indexOf(storedWindow) >= 0 ? storedWindow : 1;
-  var cardFilter = null;
+  var cardFilter = 'all';
   var detailFilters = { version: null, arch: null, os: null, channel: null };
   var expandedInstallId = null;
   var currentPage = 1;
@@ -742,7 +746,7 @@ function dashboardHtml(): string {
 
   var ACTIVE_MS = 36 * 3600000;
   var MIN_COL_WIDTH = 48;
-  var colWidths = [32, 120, 80, 80, 80, 90, 120, 120];
+  var colWidths = [32, 120, 80, 80, 80, 120, 120];
 
   function el(id) { return document.getElementById(id); }
 
@@ -859,6 +863,14 @@ function dashboardHtml(): string {
     renderChart();
     renderBreakdowns();
     renderInstallDetails();
+    renderFilterSelector();
+  }
+
+  function renderFilterSelector() {
+    var active = cardFilter || 'all';
+    document.querySelectorAll('#filter-selector .fs-btn').forEach(function (btn) {
+      btn.classList.toggle('fs-btn--active', btn.dataset.filterOpt === active);
+    });
   }
 
   function renderWindowPicker() {
@@ -1057,23 +1069,6 @@ function dashboardHtml(): string {
     currentFiltered = filtered;
     el('details-count').textContent = filtered.length;
 
-    var pillWrap = el('card-filter-pill');
-    if (cardFilter === 'active' || cardFilter === 'stale' || cardFilter === 'new_today') {
-      var pillLabel = cardFilter === 'active' ? 'Active (36h)' : cardFilter === 'stale' ? 'Stale' : 'New today';
-      pillWrap.style.display = 'block';
-      pillWrap.innerHTML = '<span class="filter-pill">' + esc(pillLabel) +
-        ' <button class="pill-dismiss" id="dismiss-card-filter"><i class="ti ti-x"></i></button></span>';
-      el('dismiss-card-filter').addEventListener('click', function (e) {
-        e.stopPropagation();
-        cardFilter = null;
-        currentPage = 1;
-        render();
-      });
-    } else {
-      pillWrap.style.display = 'none';
-      pillWrap.innerHTML = '';
-    }
-
     populateDropdown('filter-version', 'version', base);
     populateDropdown('filter-arch', 'arch', base);
     populateDropdown('filter-os', 'os', base);
@@ -1119,11 +1114,6 @@ function dashboardHtml(): string {
         cmp = semverSort(a.version || '0', b.version || '0');
         return sortDir === 'asc' ? -cmp : cmp;
       }
-      if (sortCol === 'container_count') {
-        av = a.container_count != null ? a.container_count : -1;
-        bv = b.container_count != null ? b.container_count : -1;
-        return sortDir === 'asc' ? av - bv : bv - av;
-      }
       if (sortCol === 'first_seen') {
         av = a.first_seen ? new Date(a.first_seen).getTime() : 0;
         bv = b.first_seen ? new Date(b.first_seen).getTime() : 0;
@@ -1153,7 +1143,6 @@ function dashboardHtml(): string {
       { key: 'os', label: 'OS', cls: 'col-os', sortable: true },
       { key: 'arch', label: 'Arch', cls: 'col-arch', sortable: true },
       { key: 'version', label: 'Version', cls: 'col-version', sortable: true },
-      { key: 'container_count', label: 'Containers', cls: 'col-containers', sortable: true, align: 'right' },
       { key: 'first_seen', label: 'First Seen', cls: 'col-firstseen', sortable: true },
       { key: 'last_seen', label: 'Last Seen', cls: 'col-lastseen', sortable: true }
     ];
@@ -1192,7 +1181,7 @@ function dashboardHtml(): string {
     attachResizeHandles();
 
     if (total === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" class="empty-row">No installs match the current filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-row">No installs match the current filters.</td></tr>';
       paginationBar.innerHTML = '';
       return;
     }
@@ -1233,7 +1222,6 @@ function dashboardHtml(): string {
       var isExpanded = expandedInstallId === i.install_id;
       var firstSeenRel = i.first_seen ? relTime(i.first_seen) : '-';
       var lastSeenRel = i.last_seen ? relTime(i.last_seen) : '-';
-      var containers = i.container_count != null ? i.container_count : '-';
 
       var dataRow = '<tr class="install-data-row' + (isExpanded ? ' row-expanded' : '') + '" data-id="' + esc(i.install_id || '') + '">' +
         '<td class="col-chevron">' + (isExpanded ? '▼' : '▶') + '</td>' +
@@ -1241,14 +1229,13 @@ function dashboardHtml(): string {
         '<td class="col-os">' + esc(osLabel) + '</td>' +
         '<td class="col-arch">' + esc(i.arch || '-') + '</td>' +
         '<td class="col-version">' + esc(i.version || '-') + '</td>' +
-        '<td class="col-containers" style="text-align:right">' + esc(String(containers)) + '</td>' +
         '<td class="col-firstseen">' + esc(firstSeenRel) + '</td>' +
         '<td class="col-lastseen">' + esc(lastSeenRel) + '</td>' +
         '</tr>';
 
       var detailRow = '';
       if (isExpanded) {
-        detailRow = '<tr class="install-detail-row"><td colspan="8"><div class="install-detail-panel"><div class="detail-grid">' +
+        detailRow = '<tr class="install-detail-row"><td colspan="7"><div class="install-detail-panel"><div class="detail-grid">' +
           '<div class="detail-field"><span class="detail-key">install_id</span><span class="detail-val detail-mono">' + esc(i.install_id || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">arch</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
@@ -1354,20 +1341,25 @@ function dashboardHtml(): string {
     });
   });
 
+  // ---- Filter selector clicks ----
+
+  document.querySelectorAll('#filter-selector .fs-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      cardFilter = btn.dataset.filterOpt;
+      currentPage = 1;
+      render();
+    });
+  });
+
   // ---- Stat card clicks ----
 
   document.querySelectorAll('.stat-card').forEach(function (card) {
     card.addEventListener('click', function () {
-      var filter = card.dataset.filter;
-      if (cardFilter === filter) {
-        cardFilter = null;
-      } else {
-        cardFilter = filter;
-        setTimeout(function () {
-          el('details-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 50);
-      }
+      cardFilter = card.dataset.filter;
       currentPage = 1;
+      setTimeout(function () {
+        el('details-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 50);
       render();
     });
   });
