@@ -723,8 +723,7 @@ function dashboardHtml(): string {
   var sortCol = 'first_seen';
   var sortDir = 'desc';
 
-  var ACTIVE_MS = 36 * 3600000;
-  var STALE_MS = 3 * 86400000;
+  var ACTIVE_MS = 26 * 3600000;
 
   function el(id) { return document.getElementById(id); }
 
@@ -856,7 +855,7 @@ function dashboardHtml(): string {
     allInstalls.forEach(function (i) {
       var ls = new Date(i.last_seen).getTime();
       if (now - ls <= ACTIVE_MS) activeCount++;
-      if (now - ls >= STALE_MS) staleCount++;
+      if (now - ls > ACTIVE_MS) staleCount++;
       if (isNewToday(i.first_seen)) newTodayCount++;
     });
     el('stat-active').textContent = activeCount.toLocaleString();
@@ -892,7 +891,7 @@ function dashboardHtml(): string {
         for (i = 0; i < allInstalls.length; i++) {
           ls = new Date(allInstalls[i].last_seen).getTime();
           if (cardFilter === 'stale') {
-            if (hEndMs - ls >= STALE_MS) cnt++;
+            if (hEndMs - ls > ACTIVE_MS) cnt++;
           } else if (cardFilter === 'all') {
             if (ls >= hStartMs && ls < hEndMs) cnt++;
           } else if (cardFilter === 'new_today') {
@@ -925,7 +924,7 @@ function dashboardHtml(): string {
         for (i = 0; i < allInstalls.length; i++) {
           ls = new Date(allInstalls[i].last_seen).getTime();
           if (cardFilter === 'stale') {
-            if (dayEndMs - ls >= STALE_MS) cnt++;
+            if (dayEndMs - ls > ACTIVE_MS) cnt++;
           } else if (cardFilter === 'new_today') {
             fs = allInstalls[i].first_seen;
             if (fs) { var fsDayMs = new Date(fs).getTime(); if (fsDayMs >= dayStartMs && fsDayMs < dayEndMs) cnt++; }
@@ -1019,7 +1018,7 @@ function dashboardHtml(): string {
     if (cardFilter === 'active') {
       base = allInstalls.filter(function (i) { return now - new Date(i.last_seen).getTime() <= ACTIVE_MS; });
     } else if (cardFilter === 'stale') {
-      base = allInstalls.filter(function (i) { return now - new Date(i.last_seen).getTime() >= STALE_MS; });
+      base = allInstalls.filter(function (i) { return now - new Date(i.last_seen).getTime() > ACTIVE_MS; });
     } else if (cardFilter === 'new_today') {
       base = allInstalls.filter(function (i) { return isNewToday(i.first_seen); });
     } else {
@@ -1041,7 +1040,7 @@ function dashboardHtml(): string {
 
     var pillWrap = el('card-filter-pill');
     if (cardFilter === 'active' || cardFilter === 'stale' || cardFilter === 'new_today') {
-      var pillLabel = cardFilter === 'active' ? 'Active (36h)' : cardFilter === 'stale' ? 'Stale (3d+)' : 'New today';
+      var pillLabel = cardFilter === 'active' ? 'Active (26h)' : cardFilter === 'stale' ? 'Stale' : 'New today';
       pillWrap.style.display = 'block';
       pillWrap.innerHTML = '<span class="filter-pill">' + esc(pillLabel) +
         ' <button class="pill-dismiss" id="dismiss-card-filter"><i class="ti ti-x"></i></button></span>';
