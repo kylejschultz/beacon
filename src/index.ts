@@ -544,7 +544,7 @@ function dashboardHtml(): string {
     .install-table tbody tr.install-data-row:hover td { background: rgba(255,255,255,0.02); }
     .install-table tbody tr.row-expanded td { background: rgba(34,211,238,0.03); }
     .install-table tbody tr.install-detail-row > td { padding: 0; cursor: default; background: none !important; border-top: none; }
-    .install-id-cell { font-family: monospace; font-size: 0.85rem; color: #22d3ee; }
+    .install-id-cell { font-family: monospace; font-size: 0.85rem; color: #22d3ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .install-detail-panel { background: #1c2230; border-top: 1px solid #21293a; padding: 0.85rem 1rem; }
     .detail-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem 1rem; }
     @media (max-width: 640px) { .detail-grid { grid-template-columns: 1fr 1fr; } }
@@ -1228,7 +1228,6 @@ function dashboardHtml(): string {
     }
 
     tbody.innerHTML = pageRows.map(function (i) {
-      var shortId = i.install_id ? (i.install_id.slice(0, 8) + '...') : 'unknown';
       var osLabel = (i.os != null && i.os !== '') ? i.os : '-';
       var chanLabel = (i.channel != null && i.channel !== '') ? i.channel : '-';
       var isExpanded = expandedInstallId === i.install_id;
@@ -1238,7 +1237,7 @@ function dashboardHtml(): string {
 
       var dataRow = '<tr class="install-data-row' + (isExpanded ? ' row-expanded' : '') + '" data-id="' + esc(i.install_id || '') + '">' +
         '<td class="col-chevron">' + (isExpanded ? '▼' : '▶') + '</td>' +
-        '<td class="col-installid install-id-cell">' + esc(shortId) + '</td>' +
+        '<td class="col-installid install-id-cell">' + esc(i.install_id || 'unknown') + '</td>' +
         '<td class="col-os">' + esc(osLabel) + '</td>' +
         '<td class="col-arch">' + esc(i.arch || '-') + '</td>' +
         '<td class="col-version">' + esc(i.version || '-') + '</td>' +
