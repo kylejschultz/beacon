@@ -171,7 +171,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     return new Response("Invalid JSON", { status: 400, headers: CORS_HEADERS });
   }
 
-  const { project, install_id, version, arch, timestamp, channel, container_count, os } = body as {
+  const { project, install_id, version, arch, timestamp, channel, container_count, os, dev } = body as {
     project?: unknown;
     install_id?: unknown;
     version?: unknown;
@@ -180,6 +180,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     channel?: unknown;
     container_count?: unknown;
     os?: unknown;
+    dev?: unknown;
   };
 
   if (
@@ -229,22 +230,26 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     );
   }
 
+  const isDev = dev ? 1 : 0;
+
   await env.ANALYTICS_DB.prepare(
-    `INSERT INTO installs (project, install_id, version, arch, last_seen, first_seen, channel, container_count, os)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO installs (project, install_id, version, arch, last_seen, first_seen, channel, container_count, os, is_dev)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (project, install_id) DO UPDATE SET
        version         = excluded.version,
        arch            = excluded.arch,
        last_seen       = excluded.last_seen,
        channel         = excluded.channel,
        container_count = excluded.container_count,
-       os              = excluded.os`
+       os              = excluded.os,
+       is_dev          = excluded.is_dev`
   )
     .bind(
       project, install_id, version, arch, timestamp, timestamp,
       (typeof channel === 'string' ? channel : null),
       (typeof container_count === 'number' ? container_count : null),
-      (typeof os === 'string' ? os : null)
+      (typeof os === 'string' ? os : null),
+      isDev
     )
     .run();
 
@@ -310,11 +315,13 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
 
   const url = new URL(request.url);
   const filterProject = url.searchParams.get("project");
+  const excludeDev = url.searchParams.get("exclude_dev") === "true";
   const now = Date.now();
   const activeStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleEnd = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
   const pacificMidnightUtc = `${pacificDateString()}T${String(Math.abs(PACIFIC_OFFSET_HOURS)).padStart(2, "0")}:00:00.000Z`;
+  const devFilter = excludeDev ? " AND is_dev = 0" : "";
 
   let activeResult: { count: number } | null;
   let totalResult: { count: number } | null;
@@ -323,29 +330,29 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
 
   if (filterProject) {
     activeResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?`
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?${devFilter}`
     ).bind(activeStart, filterProject).first<{ count: number }>();
     totalResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs WHERE project = ?`
+      `SELECT COUNT(*) AS count FROM installs WHERE project = ?${devFilter}`
     ).bind(filterProject).first<{ count: number }>();
     staleResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ? AND project = ?`
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ? AND project = ?${devFilter}`
     ).bind(staleStart, staleEnd, filterProject).first<{ count: number }>();
     newTodayResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs WHERE first_seen >= ? AND project = ?`
+      `SELECT COUNT(*) AS count FROM installs WHERE first_seen >= ? AND project = ?${devFilter}`
     ).bind(pacificMidnightUtc, filterProject).first<{ count: number }>();
   } else {
     activeResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?`
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?${devFilter}`
     ).bind(activeStart).first<{ count: number }>();
     totalResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs`
+      `SELECT COUNT(*) AS count FROM installs WHERE 1=1${devFilter}`
     ).first<{ count: number }>();
     staleResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ?`
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ?${devFilter}`
     ).bind(staleStart, staleEnd).first<{ count: number }>();
     newTodayResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs WHERE first_seen >= ?`
+      `SELECT COUNT(*) AS count FROM installs WHERE first_seen >= ?${devFilter}`
     ).bind(pacificMidnightUtc).first<{ count: number }>();
   }
 
@@ -408,13 +415,14 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
     channel: string | null;
     container_count: number | null;
     os: string | null;
+    is_dev: number;
   };
 
   let rows: InstallRow[];
 
   if (filterProject) {
     const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, os
+      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, os, is_dev
        FROM installs WHERE project = ? ORDER BY project, last_seen DESC`
     )
       .bind(filterProject)
@@ -422,7 +430,7 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
     rows = result.results;
   } else {
     const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, os
+      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, os, is_dev
        FROM installs ORDER BY project, last_seen DESC`
     )
       .all<InstallRow>();
@@ -439,6 +447,7 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
     channel: row.channel,
     container_count: row.container_count,
     os: row.os,
+    is_dev: row.is_dev === 1,
   }));
 
   return new Response(JSON.stringify({ installs }), {
@@ -636,6 +645,12 @@ function dashboardHtml(): string {
     @media (max-width: 640px) {
       .col-os, .col-arch, .col-lastseen { display: none; }
     }
+    .dev-badge {
+      display: inline-flex; align-items: center;
+      background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.3);
+      color: #fbbf24; border-radius: 20px; padding: 0.1rem 0.45rem;
+      font-size: 0.7rem; font-weight: 600; margin-left: 0.35rem; vertical-align: middle;
+    }
   </style>
 </head>
 <body>
@@ -660,6 +675,9 @@ function dashboardHtml(): string {
       <span class="logo-dot"></span>
       <span class="logo-text">beacon</span>
       <span class="pill-badge">nestview</span>
+    </div>
+    <div style="margin-left:1rem">
+      <button class="pill-btn" id="dev-toggle"></button>
     </div>
   </header>
 
@@ -809,6 +827,7 @@ function dashboardHtml(): string {
   var validWindows = [1, 7, 14, 30, 90];
   var storedWindow = parseInt(localStorage.getItem('beacon_window_days') || '1', 10);
   var windowDays = validWindows.indexOf(storedWindow) >= 0 ? storedWindow : 1;
+  var excludeDev = localStorage.getItem('beacon_exclude_dev') !== 'false';
   var cardFilter = 'all';
   var detailFilters = { version: null, arch: null, os: null, channel: null };
   var expandedInstallId = null;
@@ -890,7 +909,14 @@ function dashboardHtml(): string {
     el('dashboard-page').style.display = 'block';
   }
 
-  if (token) { showDashboard(); loadData(token); }
+  if (token) { showDashboard(); loadData(token); renderDevToggle(); }
+
+  el('dev-toggle').addEventListener('click', function () {
+    excludeDev = !excludeDev;
+    localStorage.setItem('beacon_exclude_dev', String(excludeDev));
+    currentPage = 1;
+    render();
+  });
 
   el('login-form').addEventListener('submit', function (e) {
     e.preventDefault();
@@ -934,12 +960,18 @@ function dashboardHtml(): string {
   // ---- Render ----
 
   function render() {
+    renderDevToggle();
     renderWindowPicker();
     renderStatCards();
     renderChart();
     renderBreakdowns();
     renderInstallDetails();
     renderFilterSelector();
+  }
+
+  function renderDevToggle() {
+    var btn = el('dev-toggle');
+    btn.textContent = excludeDev ? 'Excluding dev' : 'All installs';
   }
 
   function renderFilterSelector() {
@@ -959,14 +991,15 @@ function dashboardHtml(): string {
   function renderStatCards() {
     var now = Date.now();
     var activeCount = 0, staleCount = 0, newTodayCount = 0;
-    allInstalls.forEach(function (i) {
+    var counted = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls;
+    counted.forEach(function (i) {
       var ls = new Date(i.last_seen).getTime();
       if (now - ls <= ACTIVE_MS) activeCount++;
       if (now - ls > ACTIVE_MS) staleCount++;
       if (isNewToday(i.first_seen)) newTodayCount++;
     });
     el('stat-active').textContent = activeCount.toLocaleString();
-    el('stat-total').textContent = allInstalls.length.toLocaleString();
+    el('stat-total').textContent = counted.length.toLocaleString();
     el('stat-new').textContent = newTodayCount.toLocaleString();
     el('stat-stale').textContent = staleCount.toLocaleString();
     document.querySelectorAll('.stat-card').forEach(function (card) {
@@ -989,20 +1022,21 @@ function dashboardHtml(): string {
     var labels = [], chartData = [];
     var nowTs = Date.now();
     var i, cnt, ls, fs;
+    var chartInstalls = excludeDev ? allInstalls.filter(function (x) { return !x.is_dev; }) : allInstalls;
 
     if (windowDays === 1) {
       for (var h = 23; h >= 0; h--) {
         var hEndMs = nowTs - h * 3600000;
         var hStartMs = hEndMs - 3600000;
         cnt = 0;
-        for (i = 0; i < allInstalls.length; i++) {
-          ls = new Date(allInstalls[i].last_seen).getTime();
+        for (i = 0; i < chartInstalls.length; i++) {
+          ls = new Date(chartInstalls[i].last_seen).getTime();
           if (cardFilter === 'stale') {
             if (hEndMs - ls > ACTIVE_MS) cnt++;
           } else if (cardFilter === 'all') {
             if (ls >= hStartMs && ls < hEndMs) cnt++;
           } else if (cardFilter === 'new_today') {
-            fs = allInstalls[i].first_seen;
+            fs = chartInstalls[i].first_seen;
             if (fs) { var fsMs = new Date(fs).getTime(); if (fsMs >= hStartMs && fsMs < hEndMs) cnt++; }
           } else {
             if (hEndMs - ls <= ACTIVE_MS && ls < hEndMs) cnt++;
@@ -1028,12 +1062,12 @@ function dashboardHtml(): string {
         var dayEndMs = nowTs - dj * 86400000;
         var dayStartMs = dayEndMs - 86400000;
         cnt = 0;
-        for (i = 0; i < allInstalls.length; i++) {
-          ls = new Date(allInstalls[i].last_seen).getTime();
+        for (i = 0; i < chartInstalls.length; i++) {
+          ls = new Date(chartInstalls[i].last_seen).getTime();
           if (cardFilter === 'stale') {
             if (dayEndMs - ls > ACTIVE_MS) cnt++;
           } else if (cardFilter === 'new_today') {
-            fs = allInstalls[i].first_seen;
+            fs = chartInstalls[i].first_seen;
             if (fs) { var fsDayMs = new Date(fs).getTime(); if (fsDayMs >= dayStartMs && fsDayMs < dayEndMs) cnt++; }
           } else {
             if (dayEndMs - ls <= ACTIVE_MS && ls < dayEndMs) cnt++;
@@ -1086,7 +1120,8 @@ function dashboardHtml(): string {
 
   function renderBreakdowns() {
     var cutoff = windowCutoff();
-    var active = allInstalls.filter(function (i) { return new Date(i.last_seen).getTime() >= cutoff; });
+    var source = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls;
+    var active = source.filter(function (i) { return new Date(i.last_seen).getTime() >= cutoff; });
     var total = active.length;
 
     function buildDist(field) {
@@ -1121,15 +1156,16 @@ function dashboardHtml(): string {
 
   function renderInstallDetails() {
     var now = Date.now();
+    var source = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls;
     var base;
     if (cardFilter === 'active') {
-      base = allInstalls.filter(function (i) { return now - new Date(i.last_seen).getTime() <= ACTIVE_MS; });
+      base = source.filter(function (i) { return now - new Date(i.last_seen).getTime() <= ACTIVE_MS; });
     } else if (cardFilter === 'stale') {
-      base = allInstalls.filter(function (i) { return now - new Date(i.last_seen).getTime() > ACTIVE_MS; });
+      base = source.filter(function (i) { return now - new Date(i.last_seen).getTime() > ACTIVE_MS; });
     } else if (cardFilter === 'new_today') {
-      base = allInstalls.filter(function (i) { return isNewToday(i.first_seen); });
+      base = source.filter(function (i) { return isNewToday(i.first_seen); });
     } else {
-      base = allInstalls.slice();
+      base = source.slice();
     }
 
     var filtered = base.filter(function (i) {
@@ -1299,9 +1335,10 @@ function dashboardHtml(): string {
       var firstSeenRel = i.first_seen ? relTime(i.first_seen) : '-';
       var lastSeenRel = i.last_seen ? relTime(i.last_seen) : '-';
 
+      var devBadge = (!excludeDev && i.is_dev) ? '<span class="dev-badge">dev</span>' : '';
       var dataRow = '<tr class="install-data-row' + (isExpanded ? ' row-expanded' : '') + '" data-id="' + esc(i.install_id || '') + '">' +
         '<td class="col-chevron">' + (isExpanded ? '▼' : '▶') + '</td>' +
-        '<td class="col-installid install-id-cell">' + esc(i.install_id || 'unknown') + '</td>' +
+        '<td class="col-installid install-id-cell">' + esc(i.install_id || 'unknown') + devBadge + '</td>' +
         '<td class="col-os">' + esc(osLabel) + '</td>' +
         '<td class="col-arch">' + esc(i.arch || '-') + '</td>' +
         '<td class="col-version">' + esc(i.version || '-') + '</td>' +
