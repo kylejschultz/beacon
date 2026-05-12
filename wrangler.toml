@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2025-05-07"
 compatibility_flags = ["nodejs_compat"]
 
+# Required secrets (set via `wrangler secret put <NAME>` before deploying):
+#   STATS_SECRET - password for dashboard login and JWT signing key (never sent over the wire)
+#   API_SECRET   - bearer token for machine-to-machine calls (e.g. GitHub Actions discord-stats workflow)
+
 routes = [
   { pattern = "beacon.kjschultz.com", custom_domain = true }
 ]

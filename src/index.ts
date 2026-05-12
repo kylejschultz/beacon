@@ -1,6 +1,7 @@
 export interface Env {
   ANALYTICS_DB: D1Database;
   STATS_SECRET: string;
+  API_SECRET: string;
 }
 
 const CORS_HEADERS = {
@@ -13,18 +14,94 @@ const ACTIVE_WINDOW_DAYS = 30;
 const HISTORY_DAYS = 90;
 // Pacific offset: UTC-7 (PDT). Adjust to -8 during PST if needed.
 const PACIFIC_OFFSET_HOURS = -7;
+const MAX_FIELD_LENGTH = 255;
 
 function pacificDateString(date: Date = new Date()): string {
   const pacific = new Date(date.getTime() + PACIFIC_OFFSET_HOURS * 60 * 60 * 1000);
   return pacific.toISOString().slice(0, 10);
 }
 
-function checkSecret(request: Request, url: URL, env: Env): boolean {
-  const authHeader = request.headers.get("Authorization");
-  const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  const queryKey = url.searchParams.get("key");
-  const provided = bearerToken ?? queryKey;
-  return provided === env.STATS_SECRET;
+function base64urlEncode(data: ArrayBuffer | string): string {
+  let binary = '';
+  const bytes = typeof data === 'string'
+    ? new TextEncoder().encode(data)
+    : new Uint8Array(data);
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function base64urlDecode(s: string): Uint8Array {
+  const padded = s.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = (4 - (padded.length % 4)) % 4;
+  const binary = atob(padded + '='.repeat(pad));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function signJWT(payload: Record<string, unknown>, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const header = base64urlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const body = base64urlEncode(JSON.stringify(payload));
+  const data = `${header}.${body}`;
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data));
+  return `${data}.${base64urlEncode(sig)}`;
+}
+
+async function verifyJWT(token: string, secret: string): Promise<boolean> {
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+  try {
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+    const sig = base64urlDecode(parts[2]);
+    const valid = await crypto.subtle.verify(
+      'HMAC', key, sig, new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
+    );
+    if (!valid) return false;
+    const payload = JSON.parse(new TextDecoder().decode(base64urlDecode(parts[1])));
+    return typeof payload.exp === 'number' && Math.floor(Date.now() / 1000) < payload.exp;
+  } catch {
+    return false;
+  }
+}
+
+async function timingSafeEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [aDigest, bDigest] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(a)),
+    crypto.subtle.digest('SHA-256', enc.encode(b)),
+  ]);
+  const aArr = new Uint8Array(aDigest);
+  const bArr = new Uint8Array(bDigest);
+  let diff = 0;
+  for (let i = 0; i < aArr.length; i++) diff |= aArr[i] ^ bArr[i];
+  return diff === 0;
+}
+
+async function verifyBearerJWT(request: Request, env: Env): Promise<boolean> {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) return false;
+  return verifyJWT(authHeader.slice(7), env.STATS_SECRET);
+}
+
+async function verifySummaryAuth(request: Request, env: Env): Promise<boolean> {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) return false;
+  const token = authHeader.slice(7);
+  if (await verifyJWT(token, env.STATS_SECRET)) return true;
+  return timingSafeEqual(token, env.API_SECRET);
 }
 
 export default {
@@ -37,10 +114,6 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/ping") {
       return handlePing(request, env);
-    }
-
-    if (request.method === "GET" && url.pathname === "/stats") {
-      return handleStats(request, env);
     }
 
     if (request.method === "GET" && url.pathname === "/history") {
@@ -85,7 +158,7 @@ export default {
           .run();
       }
     } catch {
-      // cron failure must not affect /ping or /stats
+      // cron failure must not affect /ping
     }
   },
 };
@@ -99,19 +172,59 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   }
 
   const { project, install_id, version, arch, timestamp, channel, container_count, os } = body as {
-    project?: string;
-    install_id?: string;
-    version?: string;
-    arch?: string;
-    timestamp?: string;
-    channel?: string;
-    container_count?: number;
-    os?: string;
+    project?: unknown;
+    install_id?: unknown;
+    version?: unknown;
+    arch?: unknown;
+    timestamp?: unknown;
+    channel?: unknown;
+    container_count?: unknown;
+    os?: unknown;
   };
 
-  if (!project || !install_id || !version || !arch || !timestamp) {
+  if (
+    typeof project !== 'string' || !project ||
+    typeof install_id !== 'string' || !install_id ||
+    typeof version !== 'string' || !version ||
+    typeof arch !== 'string' || !arch ||
+    typeof timestamp !== 'string' || !timestamp
+  ) {
     return new Response(
       JSON.stringify({ error: "Missing required fields: project, install_id, version, arch, timestamp" }),
+      { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+    );
+  }
+
+  if (
+    project.length > MAX_FIELD_LENGTH ||
+    install_id.length > MAX_FIELD_LENGTH ||
+    version.length > MAX_FIELD_LENGTH ||
+    arch.length > MAX_FIELD_LENGTH ||
+    timestamp.length > MAX_FIELD_LENGTH
+  ) {
+    return new Response(
+      JSON.stringify({ error: "Field value too long" }),
+      { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+    );
+  }
+
+  if (channel !== undefined && channel !== null && (typeof channel !== 'string' || channel.length > MAX_FIELD_LENGTH)) {
+    return new Response(
+      JSON.stringify({ error: "Invalid channel field" }),
+      { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+    );
+  }
+
+  if (os !== undefined && os !== null && (typeof os !== 'string' || os.length > MAX_FIELD_LENGTH)) {
+    return new Response(
+      JSON.stringify({ error: "Invalid os field" }),
+      { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+    );
+  }
+
+  if (container_count !== undefined && container_count !== null && (typeof container_count !== 'number' || !Number.isFinite(container_count))) {
+    return new Response(
+      JSON.stringify({ error: "Invalid container_count field" }),
       { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
     );
   }
@@ -127,8 +240,12 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
        container_count = excluded.container_count,
        os              = excluded.os`
   )
-    .bind(project, install_id, version, arch, timestamp, timestamp,
-          channel ?? null, container_count ?? null, os ?? null)
+    .bind(
+      project, install_id, version, arch, timestamp, timestamp,
+      (typeof channel === 'string' ? channel : null),
+      (typeof container_count === 'number' ? container_count : null),
+      (typeof os === 'string' ? os : null)
+    )
     .run();
 
   return new Response(JSON.stringify({ ok: true }), {
@@ -137,58 +254,15 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   });
 }
 
-async function handleStats(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-
-  if (!checkSecret(request, url, env)) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  const windowStart = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const filterProject = url.searchParams.get("project");
-
-  let rows: { project: string; count: number }[];
-
-  if (filterProject) {
-    const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ? GROUP BY project`
-    )
-      .bind(windowStart, filterProject)
-      .all<{ project: string; count: number }>();
-    rows = result.results;
-  } else {
-    const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, COUNT(*) AS count FROM installs WHERE last_seen >= ? GROUP BY project`
-    )
-      .bind(windowStart)
-      .all<{ project: string; count: number }>();
-    rows = result.results;
-  }
-
-  const projects: Record<string, number> = {};
-  for (const row of rows) {
-    projects[row.project] = row.count;
-  }
-
-  return new Response(
-    JSON.stringify({ window_days: ACTIVE_WINDOW_DAYS, projects }),
-    { status: 200, headers: { "Content-Type": "application/json" } }
-  );
-}
-
 async function handleHistory(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-
-  if (!checkSecret(request, url, env)) {
+  if (!await verifyBearerJWT(request, env)) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     });
   }
 
+  const url = new URL(request.url);
   const cutoff = pacificDateString(new Date(Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000));
   const filterProject = url.searchParams.get("project");
 
@@ -227,15 +301,14 @@ async function handleHistory(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleSummary(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-
-  if (!checkSecret(request, url, env)) {
+  if (!await verifySummaryAuth(request, env)) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     });
   }
 
+  const url = new URL(request.url);
   const filterProject = url.searchParams.get("project");
   const now = Date.now();
   const activeStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -298,29 +371,31 @@ async function handleAuth(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  if (!body.password || body.password !== env.STATS_SECRET) {
+  if (!body.password || !await timingSafeEqual(body.password, env.STATS_SECRET)) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  return new Response(JSON.stringify({ token: env.STATS_SECRET }), {
+  const now = Math.floor(Date.now() / 1000);
+  const jwt = await signJWT({ iat: now, exp: now + 86400 }, env.STATS_SECRET);
+
+  return new Response(JSON.stringify({ token: jwt }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
 }
 
 async function handleInstalls(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-
-  if (!checkSecret(request, url, env)) {
+  if (!await verifyBearerJWT(request, env)) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     });
   }
 
+  const url = new URL(request.url);
   const filterProject = url.searchParams.get("project");
 
   type InstallRow = {
@@ -839,9 +914,10 @@ function dashboardHtml(): string {
   // ---- Data ----
 
   function loadData(t) {
+    var authHeaders = { 'Authorization': 'Bearer ' + t };
     Promise.all([
-      fetch('/installs?key=' + encodeURIComponent(t)),
-      fetch('/history?key=' + encodeURIComponent(t))
+      fetch('/installs', { headers: authHeaders }),
+      fetch('/history', { headers: authHeaders })
     ]).then(function (responses) {
       if (!responses[0].ok || !responses[1].ok) {
         sessionStorage.removeItem('beacon_token'); showLogin(); return null;
