@@ -840,6 +840,10 @@ function dashboardHtml(): string {
 
   var ACTIVE_MS = 36 * 3600000;
   var MIN_COL_WIDTH = 48;
+
+  function isActiveAt(install, refTime) {
+    return refTime - new Date(install.last_seen).getTime() <= ACTIVE_MS;
+  }
   var colWidths = [32, 120, 80, 80, 80, 120, 120];
 
   function el(id) { return document.getElementById(id); }
@@ -892,10 +896,6 @@ function dashboardHtml(): string {
       if (d !== 0) return d;
     }
     return 0;
-  }
-
-  function windowCutoff() {
-    return Date.now() - windowDays * 86400000;
   }
 
   // ---- Auth ----
@@ -993,9 +993,8 @@ function dashboardHtml(): string {
     var activeCount = 0, staleCount = 0, newTodayCount = 0;
     var counted = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls;
     counted.forEach(function (i) {
-      var ls = new Date(i.last_seen).getTime();
-      if (now - ls <= ACTIVE_MS) activeCount++;
-      if (now - ls > ACTIVE_MS) staleCount++;
+      if (isActiveAt(i, now)) activeCount++;
+      else staleCount++;
       if (isNewToday(i.first_seen)) newTodayCount++;
     });
     el('stat-active').textContent = activeCount.toLocaleString();
@@ -1039,7 +1038,7 @@ function dashboardHtml(): string {
             fs = chartInstalls[i].first_seen;
             if (fs) { var fsMs = new Date(fs).getTime(); if (fsMs >= hStartMs && fsMs < hEndMs) cnt++; }
           } else {
-            if (hEndMs - ls <= ACTIVE_MS && ls < hEndMs) cnt++;
+            if (hEndMs - ls <= ACTIVE_MS) cnt++;
           }
         }
         var hh = new Date(hStartMs).getUTCHours();
@@ -1070,7 +1069,7 @@ function dashboardHtml(): string {
             fs = chartInstalls[i].first_seen;
             if (fs) { var fsDayMs = new Date(fs).getTime(); if (fsDayMs >= dayStartMs && fsDayMs < dayEndMs) cnt++; }
           } else {
-            if (dayEndMs - ls <= ACTIVE_MS && ls < dayEndMs) cnt++;
+            if (dayEndMs - ls <= ACTIVE_MS) cnt++;
           }
         }
         labels.push(new Date(dayEndMs).toISOString().slice(5, 10));
@@ -1119,9 +1118,9 @@ function dashboardHtml(): string {
   }
 
   function renderBreakdowns() {
-    var cutoff = windowCutoff();
+    var now = Date.now();
     var source = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls;
-    var active = source.filter(function (i) { return new Date(i.last_seen).getTime() >= cutoff; });
+    var active = source.filter(function (i) { return isActiveAt(i, now); });
     var total = active.length;
 
     function buildDist(field) {
@@ -1159,9 +1158,9 @@ function dashboardHtml(): string {
     var source = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls;
     var base;
     if (cardFilter === 'active') {
-      base = source.filter(function (i) { return now - new Date(i.last_seen).getTime() <= ACTIVE_MS; });
+      base = source.filter(function (i) { return isActiveAt(i, now); });
     } else if (cardFilter === 'stale') {
-      base = source.filter(function (i) { return now - new Date(i.last_seen).getTime() > ACTIVE_MS; });
+      base = source.filter(function (i) { return !isActiveAt(i, now); });
     } else if (cardFilter === 'new_today') {
       base = source.filter(function (i) { return isNewToday(i.first_seen); });
     } else {
