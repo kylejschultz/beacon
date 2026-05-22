@@ -157,6 +157,10 @@ export default {
           .bind(row.project, today, row.count)
           .run();
       }
+
+      await env.ANALYTICS_DB.prepare(
+        `DELETE FROM installs WHERE last_seen < datetime('now', '-30 days')`
+      ).run();
     } catch {
       // cron failure must not affect /ping
     }
@@ -253,6 +257,12 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     )
     .run();
 
+  await env.ANALYTICS_DB.prepare(
+    `INSERT OR IGNORE INTO install_lifetime (project, install_id, first_seen) VALUES (?, ?, ?)`
+  )
+    .bind(project, install_id, timestamp)
+    .run();
+
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
@@ -332,9 +342,18 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
     activeResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?${devFilter}`
     ).bind(activeStart, filterProject).first<{ count: number }>();
-    totalResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs WHERE project = ?${devFilter}`
-    ).bind(filterProject).first<{ count: number }>();
+    totalResult = excludeDev
+      ? await env.ANALYTICS_DB.prepare(
+          `SELECT COUNT(*) AS count FROM install_lifetime il
+           WHERE il.project = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM installs i
+             WHERE i.project = il.project AND i.install_id = il.install_id AND i.is_dev = 1
+           )`
+        ).bind(filterProject).first<{ count: number }>()
+      : await env.ANALYTICS_DB.prepare(
+          `SELECT COUNT(*) AS count FROM install_lifetime WHERE project = ?`
+        ).bind(filterProject).first<{ count: number }>();
     staleResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ? AND project = ?${devFilter}`
     ).bind(staleStart, staleEnd, filterProject).first<{ count: number }>();
@@ -345,9 +364,17 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
     activeResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?${devFilter}`
     ).bind(activeStart).first<{ count: number }>();
-    totalResult = await env.ANALYTICS_DB.prepare(
-      `SELECT COUNT(*) AS count FROM installs WHERE 1=1${devFilter}`
-    ).first<{ count: number }>();
+    totalResult = excludeDev
+      ? await env.ANALYTICS_DB.prepare(
+          `SELECT COUNT(*) AS count FROM install_lifetime il
+           WHERE NOT EXISTS (
+             SELECT 1 FROM installs i
+             WHERE i.project = il.project AND i.install_id = il.install_id AND i.is_dev = 1
+           )`
+        ).first<{ count: number }>()
+      : await env.ANALYTICS_DB.prepare(
+          `SELECT COUNT(*) AS count FROM install_lifetime`
+        ).first<{ count: number }>();
     staleResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND last_seen < ?${devFilter}`
     ).bind(staleStart, staleEnd).first<{ count: number }>();
