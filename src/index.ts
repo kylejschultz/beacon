@@ -11,6 +11,7 @@ const CORS_HEADERS = {
 };
 
 const ACTIVE_WINDOW_DAYS = 30;
+const RECENT_ACTIVE_HOURS = 36;
 const HISTORY_DAYS = 90;
 // Pacific offset: UTC-7 (PDT). Adjust to -8 during PST if needed.
 const PACIFIC_OFFSET_HOURS = -7;
@@ -327,21 +328,30 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
   const filterProject = url.searchParams.get("project");
   const excludeDev = url.searchParams.get("exclude_dev") === "true";
   const now = Date.now();
+  const recentActiveStart = new Date(now - RECENT_ACTIVE_HOURS * 60 * 60 * 1000).toISOString();
   const activeStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleEnd = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
   const pacificMidnightUtc = `${pacificDateString()}T${String(Math.abs(PACIFIC_OFFSET_HOURS)).padStart(2, "0")}:00:00.000Z`;
   const devFilter = excludeDev ? " AND is_dev = 0" : "";
 
+  let recentActiveResult: { count: number } | null;
   let activeResult: { count: number } | null;
+  let retainedResult: { count: number } | null;
   let totalResult: { count: number } | null;
   let staleResult: { count: number } | null;
   let newTodayResult: { count: number } | null;
 
   if (filterProject) {
+    recentActiveResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?${devFilter}`
+    ).bind(recentActiveStart, filterProject).first<{ count: number }>();
     activeResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?${devFilter}`
     ).bind(activeStart, filterProject).first<{ count: number }>();
+    retainedResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE project = ?${devFilter}`
+    ).bind(filterProject).first<{ count: number }>();
     totalResult = excludeDev
       ? await env.ANALYTICS_DB.prepare(
           `SELECT COUNT(*) AS count FROM install_lifetime il
@@ -361,9 +371,15 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
       `SELECT COUNT(*) AS count FROM installs WHERE first_seen >= ? AND project = ?${devFilter}`
     ).bind(pacificMidnightUtc, filterProject).first<{ count: number }>();
   } else {
+    recentActiveResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?${devFilter}`
+    ).bind(recentActiveStart).first<{ count: number }>();
     activeResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?${devFilter}`
     ).bind(activeStart).first<{ count: number }>();
+    retainedResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE 1=1${devFilter}`
+    ).first<{ count: number }>();
     totalResult = excludeDev
       ? await env.ANALYTICS_DB.prepare(
           `SELECT COUNT(*) AS count FROM install_lifetime il
@@ -385,7 +401,10 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
 
   return new Response(
     JSON.stringify({
+      active_recent: recentActiveResult?.count ?? 0,
       active: activeResult?.count ?? 0,
+      active_30d: activeResult?.count ?? 0,
+      retained: retainedResult?.count ?? 0,
       total: totalResult?.count ?? 0,
       stale: staleResult?.count ?? 0,
       new_today: newTodayResult?.count ?? 0,
@@ -712,9 +731,13 @@ function dashboardHtml(): string {
     <div class="stat-cards">
       <div class="stat-card" data-filter="active">
         <div class="stat-value" id="stat-active">-</div>
-        <div class="stat-label">Active installs</div>
+        <div class="stat-label">Active 36h</div>
       </div>
       <div class="stat-card" data-filter="all">
+        <div class="stat-value" id="stat-retained">-</div>
+        <div class="stat-label">Seen 30d</div>
+      </div>
+      <div class="stat-card">
         <div class="stat-value" id="stat-total">-</div>
         <div class="stat-label">All-time installs</div>
       </div>
@@ -724,7 +747,7 @@ function dashboardHtml(): string {
       </div>
       <div class="stat-card" data-filter="stale">
         <div class="stat-value stat-value--stale" id="stat-stale">-</div>
-        <div class="stat-label">Stale installs</div>
+        <div class="stat-label">Quiet 36h+</div>
       </div>
     </div>
 
@@ -782,7 +805,7 @@ function dashboardHtml(): string {
             <button class="fs-btn fs-btn--active" data-filter-opt="all">All installs</button>
             <button class="fs-btn" data-filter-opt="active">Active (36h)</button>
             <button class="fs-btn" data-filter-opt="new_today">New today</button>
-            <button class="fs-btn" data-filter-opt="stale">Stale</button>
+            <button class="fs-btn" data-filter-opt="stale">Quiet 36h+</button>
           </div>
           <div class="dropdown-wrap">
             <button class="dropdown-btn" id="filter-version">
@@ -851,6 +874,8 @@ function dashboardHtml(): string {
   var token = sessionStorage.getItem('beacon_token');
   var allInstalls = [];
   var allHistory = {};
+  var summary = {};
+  var summaryExcludeDev = {};
   var validWindows = [1, 7, 14, 30, 90];
   var storedWindow = parseInt(localStorage.getItem('beacon_window_days') || '1', 10);
   var windowDays = validWindows.indexOf(storedWindow) >= 0 ? storedWindow : 1;
@@ -970,16 +995,20 @@ function dashboardHtml(): string {
     var authHeaders = { 'Authorization': 'Bearer ' + t };
     Promise.all([
       fetch('/installs', { headers: authHeaders }),
-      fetch('/history', { headers: authHeaders })
+      fetch('/history', { headers: authHeaders }),
+      fetch('/summary?project=nestview', { headers: authHeaders }),
+      fetch('/summary?project=nestview&exclude_dev=true', { headers: authHeaders })
     ]).then(function (responses) {
-      if (!responses[0].ok || !responses[1].ok) {
+      if (!responses[0].ok || !responses[1].ok || !responses[2].ok || !responses[3].ok) {
         sessionStorage.removeItem('beacon_token'); showLogin(); return null;
       }
-      return Promise.all([responses[0].json(), responses[1].json()]);
+      return Promise.all([responses[0].json(), responses[1].json(), responses[2].json(), responses[3].json()]);
     }).then(function (data) {
       if (!data) return;
       allInstalls = (data[0].installs || []).filter(function (i) { return i.project === 'nestview'; });
       allHistory = data[1].history || {};
+      summary = data[2] || {};
+      summaryExcludeDev = data[3] || {};
       render();
     }).catch(function () { sessionStorage.removeItem('beacon_token'); showLogin(); });
   }
@@ -1019,14 +1048,16 @@ function dashboardHtml(): string {
     var now = Date.now();
     var activeCount = 0, staleCount = 0, newTodayCount = 0;
     var counted = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls;
+    var selectedSummary = excludeDev ? summaryExcludeDev : summary;
     counted.forEach(function (i) {
       if (isActiveAt(i, now)) activeCount++;
       else staleCount++;
       if (isNewToday(i.first_seen)) newTodayCount++;
     });
-    el('stat-active').textContent = activeCount.toLocaleString();
-    el('stat-total').textContent = counted.length.toLocaleString();
-    el('stat-new').textContent = newTodayCount.toLocaleString();
+    el('stat-active').textContent = (selectedSummary.active_recent ?? activeCount).toLocaleString();
+    el('stat-retained').textContent = (selectedSummary.active_30d ?? selectedSummary.active ?? counted.length).toLocaleString();
+    el('stat-total').textContent = (selectedSummary.total ?? counted.length).toLocaleString();
+    el('stat-new').textContent = (selectedSummary.new_today ?? newTodayCount).toLocaleString();
     el('stat-stale').textContent = staleCount.toLocaleString();
     document.querySelectorAll('.stat-card').forEach(function (card) {
       card.classList.toggle('stat-card--active', card.dataset.filter === cardFilter);
@@ -1035,8 +1066,8 @@ function dashboardHtml(): string {
 
   function renderChart() {
     var windowLabel = windowDays === 1 ? 'last 24h' : 'last ' + windowDays + 'd';
-    var cardLabel = cardFilter === 'all' ? 'All installs'
-      : cardFilter === 'stale' ? 'Stale installs'
+    var cardLabel = cardFilter === 'all' ? 'Seen 30d'
+      : cardFilter === 'stale' ? 'Quiet 36h+'
       : cardFilter === 'new_today' ? 'New installs'
       : 'Active installs';
     el('chart-title').textContent = cardLabel + ' - ' + windowLabel;
@@ -1114,7 +1145,7 @@ function dashboardHtml(): string {
     gradient.addColorStop(0, 'rgba(34,211,238,0.18)');
     gradient.addColorStop(1, 'rgba(34,211,238,0)');
 
-    var tooltipNoun = cardFilter === 'stale' ? 'stale' : 'installs';
+    var tooltipNoun = cardFilter === 'stale' ? 'quiet' : 'installs';
 
     histChart = new Chart(ctx, {
       type: 'line',
