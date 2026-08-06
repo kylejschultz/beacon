@@ -238,6 +238,21 @@ Response fields:
 - `stale` - installs seen between 7 and 30 days ago
 - `new_today` - installs first seen today in Pacific time
 
+### `GET /projects`
+
+Returns known project slugs from active installs, lifetime install records, and history snapshots. Requires a dashboard JWT in `Authorization: Bearer <token>`.
+
+```bash
+curl https://beacon.example.com/projects \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+
+```json
+{ "projects": ["myapp", "nestview"] }
+```
+
 ### `GET /installs`
 
 Returns per-install rows. Requires a dashboard JWT in `Authorization: Bearer <token>`.

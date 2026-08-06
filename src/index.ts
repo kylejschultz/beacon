@@ -125,6 +125,10 @@ export default {
       return handleSummary(request, env);
     }
 
+    if (request.method === "GET" && url.pathname === "/projects") {
+      return handleProjects(request, env);
+    }
+
     if (request.method === "POST" && url.pathname === "/auth") {
       return handleAuth(request, env);
     }
@@ -502,6 +506,31 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
   });
 }
 
+async function handleProjects(request: Request, env: Env): Promise<Response> {
+  if (!await verifyBearerJWT(request, env)) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const result = await env.ANALYTICS_DB.prepare(
+    `SELECT project FROM installs
+     UNION
+     SELECT project FROM install_lifetime
+     UNION
+     SELECT project FROM install_history
+     ORDER BY project ASC`
+  ).all<{ project: string }>();
+
+  return new Response(JSON.stringify({
+    projects: result.results.map((row) => row.project),
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function toPacificISOString(utcString: string): string {
   const date = new Date(utcString);
   const pacific = new Date(date.getTime() + PACIFIC_OFFSET_HOURS * 60 * 60 * 1000);
@@ -550,6 +579,7 @@ function dashboardHtml(): string {
     /* ---- Header ---- */
     header { display: flex; align-items: center; padding: 1rem 1.5rem; border-bottom: 1px solid #21293a; }
     .header-logo { display: flex; align-items: center; gap: 0.5rem; }
+    .header-actions { display: inline-flex; align-items: center; gap: 0.6rem; margin-left: 1rem; }
     .pill-btn {
       display: inline-flex; align-items: center; gap: 0.4rem;
       background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.2);
@@ -720,9 +750,16 @@ function dashboardHtml(): string {
     <div class="header-logo">
       <span class="logo-dot"></span>
       <span class="logo-text">beacon</span>
-      <span class="pill-badge">nestview</span>
+      <span class="pill-badge" id="project-badge">nestview</span>
     </div>
-    <div style="margin-left:1rem">
+    <div class="header-actions">
+      <div class="dropdown-wrap">
+        <button class="pill-btn" id="project-btn">
+          <span id="project-btn-label">nestview</span>
+          <i class="ti ti-chevron-down"></i>
+        </button>
+        <div class="dropdown-menu hidden" id="project-menu"></div>
+      </div>
       <button class="pill-btn" id="dev-toggle"></button>
     </div>
   </header>
@@ -876,6 +913,7 @@ function dashboardHtml(): string {
   var allHistory = {};
   var summary = {};
   var summaryExcludeDev = {};
+  var selectedProject = localStorage.getItem('beacon_project') || 'nestview';
   var validWindows = [1, 7, 14, 30, 90];
   var storedWindow = parseInt(localStorage.getItem('beacon_window_days') || '1', 10);
   var windowDays = validWindows.indexOf(storedWindow) >= 0 ? storedWindow : 1;
@@ -950,6 +988,10 @@ function dashboardHtml(): string {
     return 0;
   }
 
+  function projectLabel(project) {
+    return project || 'unknown';
+  }
+
   // ---- Auth ----
 
   function showLogin() {
@@ -993,19 +1035,35 @@ function dashboardHtml(): string {
 
   function loadData(t) {
     var authHeaders = { 'Authorization': 'Bearer ' + t };
-    Promise.all([
-      fetch('/installs', { headers: authHeaders }),
-      fetch('/history', { headers: authHeaders }),
-      fetch('/summary?project=nestview', { headers: authHeaders }),
-      fetch('/summary?project=nestview&exclude_dev=true', { headers: authHeaders })
-    ]).then(function (responses) {
+    fetch('/projects', { headers: authHeaders }).then(function (response) {
+      if (!response.ok) {
+        sessionStorage.removeItem('beacon_token'); showLogin(); return null;
+      }
+      return response.json();
+    }).then(function (data) {
+      if (!data) return;
+      var projects = data.projects || [];
+      if (projects.length && projects.indexOf(selectedProject) < 0) {
+        selectedProject = projects.indexOf('nestview') >= 0 ? 'nestview' : projects[0];
+        localStorage.setItem('beacon_project', selectedProject);
+      }
+      renderProjectPicker(projects);
+      var projectParam = encodeURIComponent(selectedProject);
+      return Promise.all([
+        fetch('/installs?project=' + projectParam, { headers: authHeaders }),
+        fetch('/history?project=' + projectParam, { headers: authHeaders }),
+        fetch('/summary?project=' + projectParam, { headers: authHeaders }),
+        fetch('/summary?project=' + projectParam + '&exclude_dev=true', { headers: authHeaders })
+      ]);
+    }).then(function (responses) {
+      if (!responses) return null;
       if (!responses[0].ok || !responses[1].ok || !responses[2].ok || !responses[3].ok) {
         sessionStorage.removeItem('beacon_token'); showLogin(); return null;
       }
       return Promise.all([responses[0].json(), responses[1].json(), responses[2].json(), responses[3].json()]);
     }).then(function (data) {
       if (!data) return;
-      allInstalls = (data[0].installs || []).filter(function (i) { return i.project === 'nestview'; });
+      allInstalls = data[0].installs || [];
       allHistory = data[1].history || {};
       summary = data[2] || {};
       summaryExcludeDev = data[3] || {};
@@ -1028,6 +1086,29 @@ function dashboardHtml(): string {
   function renderDevToggle() {
     var btn = el('dev-toggle');
     btn.textContent = excludeDev ? 'Excluding dev' : 'All installs';
+  }
+
+  function renderProjectPicker(projects) {
+    el('project-badge').textContent = projectLabel(selectedProject);
+    el('project-btn-label').textContent = projectLabel(selectedProject);
+    el('project-menu').innerHTML = projects.length
+      ? projects.map(function (project) {
+          return '<div class="dropdown-item' + (project === selectedProject ? ' active' : '') + '" data-value="' + esc(project) + '">' + esc(projectLabel(project)) + '</div>';
+        }).join('')
+      : '<div class="dropdown-item active" data-value="nestview">nestview</div>';
+
+    el('project-menu').querySelectorAll('.dropdown-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        selectedProject = item.dataset.value || 'nestview';
+        localStorage.setItem('beacon_project', selectedProject);
+        cardFilter = 'all';
+        detailFilters = { version: null, arch: null, os: null, channel: null };
+        expandedInstallId = null;
+        currentPage = 1;
+        closeDropdowns();
+        loadData(token);
+      });
+    });
   }
 
   function renderFilterSelector() {
@@ -1104,7 +1185,7 @@ function dashboardHtml(): string {
         chartData.push(cnt);
       }
     } else if (cardFilter === 'all') {
-      var projectHistory = allHistory['nestview'] || [];
+      var projectHistory = allHistory[selectedProject] || [];
       var histMap = {};
       for (i = 0; i < projectHistory.length; i++) {
         histMap[projectHistory[i].date] = projectHistory[i].count;
@@ -1472,6 +1553,14 @@ function dashboardHtml(): string {
   el('window-btn').addEventListener('click', function (e) {
     e.stopPropagation();
     var menu = el('window-menu');
+    var wasOpen = !menu.classList.contains('hidden');
+    closeDropdowns();
+    if (!wasOpen) menu.classList.remove('hidden');
+  });
+
+  el('project-btn').addEventListener('click', function (e) {
+    e.stopPropagation();
+    var menu = el('project-menu');
     var wasOpen = !menu.classList.contains('hidden');
     closeDropdowns();
     if (!wasOpen) menu.classList.remove('hidden');
