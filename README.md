@@ -15,6 +15,9 @@ Beacon is designed for simple product telemetry, not user tracking. A client app
 - `timestamp` - current UTC ISO 8601 timestamp
 - `channel` - optional release channel, such as `stable`, `dev`, or `nightly`
 - `container_count` - optional aggregate count for apps that manage containers
+- `artist_count` - optional aggregate artist count for music apps
+- `album_count` - optional aggregate album count for music apps
+- `song_count` - optional aggregate song count for music apps
 - `os` - optional operating system name
 - `dev` - optional boolean used to mark development or preview installs
 
@@ -67,6 +70,7 @@ Then apply the migrations that are not already folded into `schema.sql`:
 ```bash
 npx wrangler d1 execute beacon-analytics --file=migrations/0002_add_is_dev.sql
 npx wrangler d1 execute beacon-analytics --file=migrations/0003_add_install_lifetime.sql
+npx wrangler d1 execute beacon-analytics --file=migrations/0004_add_prism_library_counts.sql
 ```
 
 `migrations/0001_add_channel_container_count_os.sql` is kept for older databases created before those fields were added to the baseline schema. Do not run it against a fresh database created from the current `schema.sql`.
@@ -143,6 +147,9 @@ curl -X POST https://beacon.example.com/ping \
     "timestamp": "2026-08-05T08:00:00.000Z",
     "channel": "stable",
     "container_count": 12,
+    "artist_count": 210,
+    "album_count": 845,
+    "song_count": 10240,
     "os": "Linux"
   }'
 ```
@@ -187,6 +194,9 @@ Optional JSON fields:
 
 - `channel`: string
 - `container_count`: number
+- `artist_count`: number
+- `album_count`: number
+- `song_count`: number
 - `os`: string
 - `dev`: boolean
 
