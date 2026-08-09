@@ -180,7 +180,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     return new Response("Invalid JSON", { status: 400, headers: CORS_HEADERS });
   }
 
-  const { project, install_id, version, arch, timestamp, channel, container_count, os, dev } = body as {
+  const { project, install_id, version, arch, timestamp, channel, container_count, artist_count, album_count, song_count, os, dev } = body as {
     project?: unknown;
     install_id?: unknown;
     version?: unknown;
@@ -188,6 +188,9 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     timestamp?: unknown;
     channel?: unknown;
     container_count?: unknown;
+    artist_count?: unknown;
+    album_count?: unknown;
+    song_count?: unknown;
     os?: unknown;
     dev?: unknown;
   };
@@ -239,17 +242,41 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     );
   }
 
+  if (artist_count !== undefined && artist_count !== null && (typeof artist_count !== 'number' || !Number.isInteger(artist_count) || artist_count < 0)) {
+    return new Response(
+      JSON.stringify({ error: "Invalid artist_count field" }),
+      { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+    );
+  }
+
+  if (album_count !== undefined && album_count !== null && (typeof album_count !== 'number' || !Number.isInteger(album_count) || album_count < 0)) {
+    return new Response(
+      JSON.stringify({ error: "Invalid album_count field" }),
+      { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+    );
+  }
+
+  if (song_count !== undefined && song_count !== null && (typeof song_count !== 'number' || !Number.isInteger(song_count) || song_count < 0)) {
+    return new Response(
+      JSON.stringify({ error: "Invalid song_count field" }),
+      { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+    );
+  }
+
   const isDev = dev ? 1 : 0;
 
   await env.ANALYTICS_DB.prepare(
-    `INSERT INTO installs (project, install_id, version, arch, last_seen, first_seen, channel, container_count, os, is_dev)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO installs (project, install_id, version, arch, last_seen, first_seen, channel, container_count, artist_count, album_count, song_count, os, is_dev)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (project, install_id) DO UPDATE SET
        version         = excluded.version,
        arch            = excluded.arch,
        last_seen       = excluded.last_seen,
        channel         = excluded.channel,
        container_count = excluded.container_count,
+       artist_count    = excluded.artist_count,
+       album_count     = excluded.album_count,
+       song_count      = excluded.song_count,
        os              = excluded.os,
        is_dev          = excluded.is_dev`
   )
@@ -257,6 +284,9 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
       project, install_id, version, arch, timestamp, timestamp,
       (typeof channel === 'string' ? channel : null),
       (typeof container_count === 'number' ? container_count : null),
+      (typeof artist_count === 'number' ? artist_count : null),
+      (typeof album_count === 'number' ? album_count : null),
+      (typeof song_count === 'number' ? song_count : null),
       (typeof os === 'string' ? os : null),
       isDev
     )
@@ -464,6 +494,9 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
     first_seen: string | null;
     channel: string | null;
     container_count: number | null;
+    artist_count: number | null;
+    album_count: number | null;
+    song_count: number | null;
     os: string | null;
     is_dev: number;
   };
@@ -472,7 +505,7 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
 
   if (filterProject) {
     const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, os, is_dev
+      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, artist_count, album_count, song_count, os, is_dev
        FROM installs WHERE project = ? ORDER BY project, last_seen DESC`
     )
       .bind(filterProject)
@@ -480,7 +513,7 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
     rows = result.results;
   } else {
     const result = await env.ANALYTICS_DB.prepare(
-      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, os, is_dev
+      `SELECT project, install_id, version, arch, last_seen, first_seen, channel, container_count, artist_count, album_count, song_count, os, is_dev
        FROM installs ORDER BY project, last_seen DESC`
     )
       .all<InstallRow>();
@@ -496,6 +529,9 @@ async function handleInstalls(request: Request, env: Env): Promise<Response> {
     first_seen: row.first_seen ? toPacificISOString(row.first_seen) : null,
     channel: row.channel,
     container_count: row.container_count,
+    artist_count: row.artist_count,
+    album_count: row.album_count,
+    song_count: row.song_count,
     os: row.os,
     is_dev: row.is_dev === 1,
   }));
@@ -627,7 +663,8 @@ function dashboardHtml(): string {
     }
     .breakdown-wrap-header { margin-bottom: 0.75rem; }
     .breakdown-wrap-title { font-size: 0.82rem; color: #64748b; }
-    .breakdown-section { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1rem; }
+    .breakdown-section { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; }
+    @media (max-width: 980px) { .breakdown-section { grid-template-columns: 1fr 1fr 1fr; } }
     @media (max-width: 700px) { .breakdown-section { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 460px) { .breakdown-section { grid-template-columns: 1fr; } }
     .breakdown-card { background: #161b22; border: 1px solid #21293a; border-radius: 8px; padding: 1rem; }
@@ -637,6 +674,7 @@ function dashboardHtml(): string {
     .breakdown-bar-track { flex: 1; height: 3px; background: #21293a; border-radius: 2px; overflow: hidden; }
     .breakdown-bar { height: 100%; background: #22d3ee; border-radius: 2px; transition: width 0.3s ease; }
     .breakdown-pct { font-size: 0.75rem; color: #64748b; width: 32px; text-align: right; flex-shrink: 0; }
+    .breakdown-value { font-size: 0.75rem; color: #64748b; width: 64px; text-align: right; flex-shrink: 0; }
     .empty-text { font-size: 0.8rem; color: #64748b; }
 
     /* ---- Details section ---- */
@@ -828,6 +866,10 @@ function dashboardHtml(): string {
         <div class="breakdown-card">
           <div class="breakdown-title">Channel</div>
           <div id="breakdown-channel"></div>
+        </div>
+        <div class="breakdown-card">
+          <div class="breakdown-title">Library Size</div>
+          <div id="breakdown-library"></div>
         </div>
       </div>
     </div>
@@ -1275,6 +1317,28 @@ function dashboardHtml(): string {
     renderDist('breakdown-arch', buildDist('arch'), total, false);
     renderDist('breakdown-os', buildDist('os'), total, false);
     renderDist('breakdown-channel', buildDist('channel'), total, false);
+    renderLibraryStats(active);
+  }
+
+  function renderLibraryStats(installs) {
+    var container = el('breakdown-library');
+    var fields = [
+      ['artist_count', 'Artists'],
+      ['album_count', 'Albums'],
+      ['song_count', 'Songs']
+    ];
+    var rows = fields.map(function (field) {
+      var values = installs
+        .map(function (i) { return i[field[0]]; })
+        .filter(function (v) { return typeof v === 'number' && isFinite(v); });
+      if (values.length === 0) return null;
+      var avg = Math.round(values.reduce(function (sum, v) { return sum + v; }, 0) / values.length);
+      return '<div class="breakdown-row">' +
+        '<span class="breakdown-label" title="' + esc(field[1]) + '">' + esc(field[1]) + '</span>' +
+        '<div class="breakdown-bar-track"><div class="breakdown-bar" style="width:100%"></div></div>' +
+        '<span class="breakdown-value" title="Average">' + avg.toLocaleString() + '</span></div>';
+    }).filter(Boolean);
+    container.innerHTML = rows.length ? rows.join('') : '<span class="empty-text">No data</span>';
   }
 
   function renderDist(containerId, dist, total, sortByVersion) {
@@ -1493,6 +1557,9 @@ function dashboardHtml(): string {
           '<div class="detail-field"><span class="detail-key">os</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">channel</span><span class="detail-val">' + esc(chanLabel) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">container_count</span><span class="detail-val">' + (i.container_count != null ? i.container_count : '-') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">artist_count</span><span class="detail-val">' + (i.artist_count != null ? i.artist_count.toLocaleString() : '-') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">album_count</span><span class="detail-val">' + (i.album_count != null ? i.album_count.toLocaleString() : '-') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">song_count</span><span class="detail-val">' + (i.song_count != null ? i.song_count.toLocaleString() : '-') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">first_seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
