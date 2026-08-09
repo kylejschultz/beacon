@@ -34,7 +34,8 @@ beacon/
 All secrets are managed via Cloudflare and set with `wrangler secret put`. They are never hardcoded in source files or `wrangler.toml`.
 
 Current secrets:
-- `STATS_SECRET` - required for all dashboard and stats endpoints
+- `STATS_SECRET` - dashboard password and JWT signing key
+- `API_SECRET` - bearer token accepted by `/summary` for machine-to-machine reads
 
 ---
 
@@ -44,12 +45,15 @@ Current secrets:
 |--------|------|------|-------------|
 | `POST` | `/ping` | None | Receive telemetry ping from an install |
 | `POST` | `/auth` | None | Exchange password for session token |
-| `GET` | `/installs` | `?key=` | Per-record install data |
-| `GET` | `/history` | `?key=` | Daily snapshot history |
-| `GET` | `/summary` | `?key=` | Aggregate counts |
-| `GET` | `/` | Cookie/session | Dashboard HTML |
+| `GET` | `/projects` | Dashboard JWT | Known project slugs |
+| `GET` | `/installs` | Dashboard JWT | Per-record install data |
+| `GET` | `/history` | Dashboard JWT | Daily snapshot history |
+| `GET` | `/summary` | Dashboard JWT or `API_SECRET` bearer token | Aggregate counts |
+| `GET` | `/dashboard` | None | Dashboard HTML |
 
-Auth for data endpoints uses a `?key=` query param carrying `STATS_SECRET`. The dashboard login POSTs the password to `/auth`, receives the token, and stores it in `sessionStorage`.
+Dashboard auth uses `Authorization: Bearer <token>`. The dashboard login POSTs the password to `/auth`, receives a JWT, and stores it in `sessionStorage`. `/summary` also accepts `Authorization: Bearer <API_SECRET>` for trusted machine-to-machine reads.
+
+The dashboard project picker loads `/projects`, stores the selected slug in `localStorage` as `beacon_project`, and then fetches selected-project `/installs`, `/history`, and `/summary` data.
 
 ---
 
