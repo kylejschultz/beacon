@@ -867,9 +867,9 @@ function dashboardHtml(): string {
           <div class="breakdown-title">Channel</div>
           <div id="breakdown-channel"></div>
         </div>
-        <div class="breakdown-card">
+        <div class="breakdown-card" id="breakdown-project-stats-card" hidden>
           <div class="breakdown-title">Library Size</div>
-          <div id="breakdown-library"></div>
+          <div id="breakdown-project-stats"></div>
         </div>
       </div>
     </div>
@@ -972,6 +972,30 @@ function dashboardHtml(): string {
 
   var ACTIVE_MS = 36 * 3600000;
   var MIN_COL_WIDTH = 48;
+  var projectProfiles = {
+    nestview: {
+      breakdownTitle: 'Containers',
+      breakdownFields: [['container_count', 'Containers']],
+      detailFields: [['container_count', 'container_count']]
+    },
+    prism: {
+      breakdownTitle: 'Library Size',
+      breakdownFields: [
+        ['artist_count', 'Artists'],
+        ['album_count', 'Albums'],
+        ['song_count', 'Songs']
+      ],
+      detailFields: [
+        ['artist_count', 'artist_count'],
+        ['album_count', 'album_count'],
+        ['song_count', 'song_count']
+      ]
+    }
+  };
+
+  function projectProfile() {
+    return projectProfiles[selectedProject] || null;
+  }
 
   function isActiveAt(install, refTime) {
     return refTime - new Date(install.last_seen).getTime() <= ACTIVE_MS;
@@ -1317,16 +1341,21 @@ function dashboardHtml(): string {
     renderDist('breakdown-arch', buildDist('arch'), total, false);
     renderDist('breakdown-os', buildDist('os'), total, false);
     renderDist('breakdown-channel', buildDist('channel'), total, false);
-    renderLibraryStats(active);
+    renderProjectStats(active);
   }
 
-  function renderLibraryStats(installs) {
-    var container = el('breakdown-library');
-    var fields = [
-      ['artist_count', 'Artists'],
-      ['album_count', 'Albums'],
-      ['song_count', 'Songs']
-    ];
+  function renderProjectStats(installs) {
+    var profile = projectProfile();
+    var card = el('breakdown-project-stats-card');
+    var container = el('breakdown-project-stats');
+    card.hidden = !profile;
+    if (!profile) {
+      container.innerHTML = '';
+      return;
+    }
+
+    card.querySelector('.breakdown-title').textContent = profile.breakdownTitle;
+    var fields = profile.breakdownFields;
     var rows = fields.map(function (field) {
       var values = installs
         .map(function (i) { return i[field[0]]; })
@@ -1550,16 +1579,20 @@ function dashboardHtml(): string {
 
       var detailRow = '';
       if (isExpanded) {
+        var profile = projectProfile();
+        var projectDetailFields = profile ? profile.detailFields.map(function (field) {
+          var value = i[field[0]];
+          return '<div class="detail-field"><span class="detail-key">' + esc(field[1]) + '</span><span class="detail-val">' +
+            (value != null ? (typeof value === 'number' ? value.toLocaleString() : esc(value)) : '-') +
+            '</span></div>';
+        }).join('') : '';
         detailRow = '<tr class="install-detail-row"><td colspan="7"><div class="install-detail-panel"><div class="detail-grid">' +
           '<div class="detail-field"><span class="detail-key">install_id</span><span class="detail-val detail-mono">' + esc(i.install_id || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">arch</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">os</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">channel</span><span class="detail-val">' + esc(chanLabel) + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">container_count</span><span class="detail-val">' + (i.container_count != null ? i.container_count : '-') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">artist_count</span><span class="detail-val">' + (i.artist_count != null ? i.artist_count.toLocaleString() : '-') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">album_count</span><span class="detail-val">' + (i.album_count != null ? i.album_count.toLocaleString() : '-') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">song_count</span><span class="detail-val">' + (i.song_count != null ? i.song_count.toLocaleString() : '-') + '</span></div>' +
+          projectDetailFields +
           '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">first_seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
