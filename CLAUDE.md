@@ -87,7 +87,8 @@ Do not use em-dashes anywhere in code, comments, or commit messages. Use regular
 
 ## Branch and PR Flow
 
-- All work is done on the `dev` branch, not directly on `main`
-- Open a PR from `dev` to `main` when the work is ready to ship
-- Never push directly to `main`
-- Do not open PRs or self-merge - that is handled separately
+- `dev` is the default integration branch and `release` is the protected production-release branch.
+- Start work from current `dev` on a dedicated feature branch. Open a draft PR from that branch to `dev`.
+- When a change is ready, Kyle manually squash-merges it into `dev`. Promote tested work with a PR from `dev` to `release`.
+- Never push directly to `dev` or `release`, force-push either branch, delete either branch, approve your own PR, or merge a PR.
+- Every PR must pass the required CI checks. Deployment remains a separate, explicitly approved step.

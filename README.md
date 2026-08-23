@@ -102,6 +102,14 @@ npm run deploy
 
 After deployment, open `/dashboard` on the Worker domain and log in with `STATS_SECRET`.
 
+## Production Deployments
+
+`release` is the production branch. Merging a reviewed `dev` → `release` pull request automatically deploys the Worker through GitHub Actions, then verifies `https://beacon.kjschultz.com/health`.
+
+Before the first automated deployment, create a GitHub environment named `production` and add its `CLOUDFLARE_API_TOKEN` secret. The token needs permission to deploy Workers and update the configured route. Keep `STATS_SECRET` and `API_SECRET` in Cloudflare Workers secrets; they are not copied into GitHub.
+
+Database migrations are intentionally not applied by the deployment workflow. Apply and verify any production D1 migration before merging the corresponding `dev` → `release` pull request, since migrations can be irreversible.
+
 ## Adding Beacon to a New App
 
 Beacon does not require a client SDK. A new app only needs to create a stable anonymous install ID, ask the user before enabling telemetry, and send a daily JSON ping.

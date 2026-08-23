@@ -1,0 +1,27 @@
+name: Release security
+
+on:
+  pull_request:
+    branches: [release]
+  push:
+    branches: [release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
