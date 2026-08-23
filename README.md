@@ -104,7 +104,7 @@ After deployment, open `/dashboard` on the Worker domain and log in with `STATS_
 
 ## Production Deployments
 
-`release` is the production branch. Merging a reviewed `dev` → `release` pull request automatically deploys the Worker through GitHub Actions, then verifies `https://beacon.kjschultz.com/health`.
+`release` is the production branch. Merging a reviewed `dev` → `release` pull request automatically deploys the Worker through GitHub Actions, then verifies the active deployment through Cloudflare.
 
 Before the first automated deployment, create a GitHub environment named `production` and add its `CLOUDFLARE_API_TOKEN` secret. The token needs permission to deploy Workers and update the configured route. Keep `STATS_SECRET` and `API_SECRET` in Cloudflare Workers secrets; they are not copied into GitHub.
 
