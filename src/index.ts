@@ -117,6 +117,12 @@ export default {
       return handlePing(request, env);
     }
 
+    if (request.method === "GET" && url.pathname === "/health") {
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     if (request.method === "GET" && url.pathname === "/history") {
       return handleHistory(request, env);
     }
