@@ -674,6 +674,18 @@ function dashboardHtml(): string {
     .stat-value--new { color: #22d3ee; }
     .stat-label { font-size: 0.82rem; color: #64748b; }
 
+    /* ---- Project health ---- */
+    .project-health { background: #161b22; border: 1px solid #21293a; border-radius: 8px; padding: 1.15rem 1.25rem; margin-bottom: 1.5rem; }
+    .project-health-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+    .project-health-title { color: #94a3b8; font-size: 0.78rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+    .project-health-note { color: #64748b; font-size: 0.76rem; }
+    .project-health-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
+    .health-item { min-width: 0; }
+    .health-value { color: #f1f5f9; font-size: 1.05rem; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .health-value--good { color: #67e8f9; }
+    .health-label { color: #64748b; font-size: 0.75rem; margin-top: 0.28rem; }
+    @media (max-width: 700px) { .project-health-grid { grid-template-columns: 1fr 1fr; } }
+
     /* ---- Chart ---- */
     .chart-section {
       background: #161b22; border: 1px solid #21293a; border-radius: 8px;
@@ -881,6 +893,14 @@ function dashboardHtml(): string {
         <div class="stat-label">Quiet 36h+</div>
       </div>
     </div>
+
+    <section class="project-health">
+      <div class="project-health-header">
+        <span class="project-health-title">Project health</span>
+        <span class="project-health-note" id="project-health-note"></span>
+      </div>
+      <div class="project-health-grid" id="project-health-grid"></div>
+    </section>
 
     <div class="chart-section">
       <div class="chart-header">
@@ -1235,6 +1255,7 @@ function dashboardHtml(): string {
     el('project-subtitle').textContent = 'Installation telemetry and project health';
     renderWindowPicker();
     renderStatCards();
+    renderProjectHealth();
     renderChart();
     renderBreakdowns();
     renderInstallDetails();
@@ -1335,6 +1356,33 @@ function dashboardHtml(): string {
     document.querySelectorAll('.stat-card').forEach(function (card) {
       card.classList.toggle('stat-card--active', card.dataset.filter === cardFilter);
     });
+  }
+
+  function renderProjectHealth() {
+    var source = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls.slice();
+    var active = source.filter(function (i) { return isActiveAt(i, Date.now()); });
+    var latest = source.slice().sort(function (a, b) {
+      return new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime();
+    })[0];
+    var covered = 0;
+    var trackedFields = ['version', 'os', 'channel'];
+    source.forEach(function (install) {
+      trackedFields.forEach(function (field) {
+        if (install[field] != null && install[field] !== '') covered++;
+      });
+    });
+    var possible = source.length * trackedFields.length;
+    var coverage = possible ? Math.round(covered / possible * 100) : 0;
+    var latestVersion = latest && latest.version ? latest.version : '—';
+    var latestCheckIn = latest && latest.last_seen ? relTime(latest.last_seen) : 'No check-ins';
+    var latestTitle = latest && latest.last_seen ? fmtDate(latest.last_seen) : '';
+
+    el('project-health-note').textContent = source.length ? (excludeDev ? 'Production telemetry' : 'All telemetry') : 'No telemetry yet';
+    el('project-health-grid').innerHTML =
+      '<div class="health-item"><div class="health-value health-value--good" title="' + esc(latestTitle) + '">' + esc(latestCheckIn) + '</div><div class="health-label">Latest check-in</div></div>' +
+      '<div class="health-item"><div class="health-value" title="Latest reporting install">' + esc(latestVersion) + '</div><div class="health-label">Latest version</div></div>' +
+      '<div class="health-item"><div class="health-value">' + active.length.toLocaleString() + ' / ' + source.length.toLocaleString() + '</div><div class="health-label">Active / reporting installs</div></div>' +
+      '<div class="health-item"><div class="health-value">' + coverage + '%</div><div class="health-label">Core data coverage</div></div>';
   }
 
   function renderChart() {
