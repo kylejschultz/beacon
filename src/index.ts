@@ -1204,6 +1204,7 @@ function dashboardHtml(): string {
       ]);
     }).then(function (responses) {
       if (!responses) return null;
+      if (responses.overview) return responses;
       if (!responses[0].ok || !responses[1].ok || !responses[2].ok || !responses[3].ok) {
         sessionStorage.removeItem('beacon_token'); showLogin(); return null;
       }
