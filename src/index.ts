@@ -369,6 +369,7 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
   const excludeDev = url.searchParams.get("exclude_dev") === "true";
   const now = Date.now();
   const recentActiveStart = new Date(now - RECENT_ACTIVE_HOURS * 60 * 60 * 1000).toISOString();
+  const weekStart = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
   const activeStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleEnd = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -377,6 +378,7 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
 
   let recentActiveResult: { count: number } | null;
   let activeResult: { count: number } | null;
+  let weekResult: { count: number } | null;
   let retainedResult: { count: number } | null;
   let totalResult: { count: number } | null;
   let staleResult: { count: number } | null;
@@ -389,6 +391,9 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
     activeResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?${devFilter}`
     ).bind(activeStart, filterProject).first<{ count: number }>();
+    weekResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?${devFilter}`
+    ).bind(weekStart, filterProject).first<{ count: number }>();
     retainedResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE project = ?${devFilter}`
     ).bind(filterProject).first<{ count: number }>();
@@ -417,6 +422,9 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
     activeResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?${devFilter}`
     ).bind(activeStart).first<{ count: number }>();
+    weekResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?${devFilter}`
+    ).bind(weekStart).first<{ count: number }>();
     retainedResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE 1=1${devFilter}`
     ).first<{ count: number }>();
@@ -444,6 +452,7 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
       active_recent: recentActiveResult?.count ?? 0,
       active: activeResult?.count ?? 0,
       active_30d: activeResult?.count ?? 0,
+      active_week: weekResult?.count ?? 0,
       retained: retainedResult?.count ?? 0,
       total: totalResult?.count ?? 0,
       stale: staleResult?.count ?? 0,
@@ -595,7 +604,6 @@ function dashboardHtml(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Beacon</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"><\/script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #0d1117; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; overflow-x: hidden; }
@@ -666,7 +674,7 @@ function dashboardHtml(): string {
     .overview-label { color: #64748b; font-size: 0.77rem; }
 
     /* ---- Stat cards ---- */
-    .stat-cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .stat-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
     @media (max-width: 800px) { .stat-cards { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 420px) { .stat-cards { grid-template-columns: 1fr; } }
     .stat-card {
@@ -685,21 +693,12 @@ function dashboardHtml(): string {
     .project-health-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
     .project-health-title { color: #94a3b8; font-size: 0.78rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
     .project-health-note { color: #64748b; font-size: 0.76rem; }
-    .project-health-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
+    .project-health-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
     .health-item { min-width: 0; }
     .health-value { color: #f1f5f9; font-size: 1.05rem; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .health-value--good { color: #67e8f9; }
     .health-label { color: #64748b; font-size: 0.75rem; margin-top: 0.28rem; }
     @media (max-width: 700px) { .project-health-grid { grid-template-columns: 1fr 1fr; } }
-
-    /* ---- Chart ---- */
-    .chart-section {
-      background: #161b22; border: 1px solid #21293a; border-radius: 8px;
-      padding: 1.25rem 1.25rem 2rem; margin-bottom: 1.5rem;
-    }
-    .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
-    .chart-title { font-size: 0.82rem; color: #64748b; }
-    .chart-section canvas { display: block; width: 100% !important; height: 180px !important; }
 
     /* ---- Breakdowns ---- */
     .breakdown-wrap {
@@ -878,25 +877,21 @@ function dashboardHtml(): string {
     </section>
     <div id="project-dashboard">
     <div class="stat-cards">
-      <div class="stat-card" data-filter="active">
+      <div class="stat-card" data-filter="recent">
         <div class="stat-value" id="stat-active">-</div>
-        <div class="stat-label">Active 36h</div>
+        <div class="stat-label">Seen this week</div>
       </div>
-      <div class="stat-card" data-filter="all">
+      <div class="stat-card" data-filter="inactive">
         <div class="stat-value" id="stat-retained">-</div>
-        <div class="stat-label">Seen 30d</div>
+        <div class="stat-label">Inactive 7–30d</div>
       </div>
       <div class="stat-card">
         <div class="stat-value" id="stat-total">-</div>
         <div class="stat-label">All-time installs</div>
       </div>
-      <div class="stat-card" data-filter="new_today">
+      <div class="stat-card" data-filter="new_week">
         <div class="stat-value stat-value--new" id="stat-new">-</div>
-        <div class="stat-label">New today</div>
-      </div>
-      <div class="stat-card" data-filter="stale">
-        <div class="stat-value stat-value--stale" id="stat-stale">-</div>
-        <div class="stat-label">Quiet 36h+</div>
+        <div class="stat-label">New this week</div>
       </div>
     </div>
 
@@ -907,26 +902,6 @@ function dashboardHtml(): string {
       </div>
       <div class="project-health-grid" id="project-health-grid"></div>
     </section>
-
-    <div class="chart-section">
-      <div class="chart-header">
-        <span class="chart-title" id="chart-title">Active installs - last 24h</span>
-        <div class="dropdown-wrap">
-          <button class="pill-btn" id="window-btn">
-            <span id="window-btn-label">1d</span>
-            <i class="ti ti-chevron-down"></i>
-          </button>
-          <div class="dropdown-menu hidden" id="window-menu">
-            <div class="dropdown-item" data-value="1">1d</div>
-            <div class="dropdown-item" data-value="7">7d</div>
-            <div class="dropdown-item" data-value="14">14d</div>
-            <div class="dropdown-item" data-value="30">30d</div>
-            <div class="dropdown-item" data-value="90">90d</div>
-          </div>
-        </div>
-      </div>
-      <canvas id="history-chart"></canvas>
-    </div>
 
     <div class="breakdown-wrap">
       <div class="breakdown-wrap-header">
@@ -963,10 +938,10 @@ function dashboardHtml(): string {
       <div id="details-body">
         <div class="filter-bar">
           <div class="filter-selector-group" id="filter-selector">
-            <button class="fs-btn fs-btn--active" data-filter-opt="all">All installs</button>
-            <button class="fs-btn" data-filter-opt="active">Active (36h)</button>
-            <button class="fs-btn" data-filter-opt="new_today">New today</button>
-            <button class="fs-btn" data-filter-opt="stale">Quiet 36h+</button>
+            <button class="fs-btn fs-btn--active" data-filter-opt="all">Reporting (30d)</button>
+            <button class="fs-btn" data-filter-opt="recent">Seen this week</button>
+            <button class="fs-btn" data-filter-opt="new_week">New this week</button>
+            <button class="fs-btn" data-filter-opt="inactive">Inactive 7–30d</button>
           </div>
           <div class="dropdown-wrap">
             <button class="dropdown-btn" id="filter-version">
@@ -1036,15 +1011,11 @@ function dashboardHtml(): string {
 (function () {
   var token = sessionStorage.getItem('beacon_token');
   var allInstalls = [];
-  var allHistory = {};
   var summary = {};
   var summaryExcludeDev = {};
   var projectSummaries = {};
   var selectedProject = localStorage.getItem('beacon_project') || 'nestview';
   var selectedView = localStorage.getItem('beacon_view') || 'overview';
-  var validWindows = [1, 7, 14, 30, 90];
-  var storedWindow = parseInt(localStorage.getItem('beacon_window_days') || '1', 10);
-  var windowDays = validWindows.indexOf(storedWindow) >= 0 ? storedWindow : 1;
   var excludeDev = localStorage.getItem('beacon_exclude_dev') !== 'false';
   var cardFilter = 'all';
   var detailFilters = { version: null, arch: null, os: null, channel: null };
@@ -1052,11 +1023,10 @@ function dashboardHtml(): string {
   var currentPage = 1;
   var pageSize = 10;
   var currentFiltered = [];
-  var histChart = null;
   var sortCol = 'first_seen';
   var sortDir = 'desc';
 
-  var ACTIVE_MS = 36 * 3600000;
+  var RECENT_MS = 7 * 24 * 3600000;
   var MIN_COL_WIDTH = 48;
   var projectProfiles = {
     nestview: {
@@ -1084,7 +1054,7 @@ function dashboardHtml(): string {
   }
 
   function isActiveAt(install, refTime) {
-    return refTime - new Date(install.last_seen).getTime() <= ACTIVE_MS;
+    return refTime - new Date(install.last_seen).getTime() <= RECENT_MS;
   }
   var colWidths = [32, 120, 80, 80, 80, 120, 120];
 
@@ -1127,7 +1097,7 @@ function dashboardHtml(): string {
   function isNewToday(firstSeen) {
     if (!firstSeen) return false;
     try {
-      return pacificDateStr(new Date(firstSeen)) === pacificDateStr(new Date());
+      return Date.now() - new Date(firstSeen).getTime() <= RECENT_MS;
     } catch (e) { return false; }
   }
 
@@ -1218,17 +1188,16 @@ function dashboardHtml(): string {
       var projectParam = encodeURIComponent(selectedProject);
       return Promise.all([
         fetch('/installs?project=' + projectParam, { headers: authHeaders }),
-        fetch('/history?project=' + projectParam, { headers: authHeaders }),
         fetch('/summary?project=' + projectParam, { headers: authHeaders }),
         fetch('/summary?project=' + projectParam + '&exclude_dev=true', { headers: authHeaders })
       ]);
     }).then(function (responses) {
       if (!responses) return null;
       if (responses.overview) return responses;
-      if (!responses[0].ok || !responses[1].ok || !responses[2].ok || !responses[3].ok) {
+      if (!responses[0].ok || !responses[1].ok || !responses[2].ok) {
         sessionStorage.removeItem('beacon_token'); showLogin(); return null;
       }
-      return Promise.all([responses[0].json(), responses[1].json(), responses[2].json(), responses[3].json()])
+      return Promise.all([responses[0].json(), responses[1].json(), responses[2].json()])
         .then(function (results) { return { overview: false, results: results }; });
     }).then(function (data) {
       if (!data) return;
@@ -1239,9 +1208,8 @@ function dashboardHtml(): string {
         });
       } else {
         allInstalls = data.results[0].installs || [];
-        allHistory = data.results[1].history || {};
-        summary = data.results[2] || {};
-        summaryExcludeDev = data.results[3] || {};
+        summary = data.results[1] || {};
+        summaryExcludeDev = data.results[2] || {};
       }
       render();
     }).catch(function () { sessionStorage.removeItem('beacon_token'); showLogin(); });
@@ -1259,10 +1227,8 @@ function dashboardHtml(): string {
     el('project-dashboard').hidden = false;
     el('project-heading').textContent = projectLabel(selectedProject);
     el('project-subtitle').textContent = 'Installation telemetry and project health';
-    renderWindowPicker();
     renderStatCards();
     renderProjectHealth();
-    renderChart();
     renderBreakdowns();
     renderInstallDetails();
     renderFilterSelector();
@@ -1311,12 +1277,12 @@ function dashboardHtml(): string {
     var projects = Object.keys(projectSummaries).sort();
     el('overview-grid').innerHTML = projects.length ? projects.map(function (project) {
       var stats = projectSummaries[project][excludeDev ? 'excludeDev' : 'all'] || {};
-      var active = Number(stats.active_recent || 0);
+      var active = Number(stats.active_week || 0);
       var total = Number(stats.total || 0);
       return '<button class="overview-card" data-project="' + esc(project) + '">' +
         '<div class="overview-card-header"><span class="overview-card-title">' + esc(projectLabel(project)) + '</span>' +
-        '<span class="overview-status' + (active ? '' : ' quiet') + '">' + (active ? 'Reporting now' : 'No active installs') + '</span></div>' +
-        '<div class="overview-stats"><div><div class="overview-value">' + active.toLocaleString() + '</div><div class="overview-label">Active 36h</div></div>' +
+        '<span class="overview-status' + (active ? '' : ' quiet') + '">' + (active ? 'Seen this week' : 'No recent check-ins') + '</span></div>' +
+        '<div class="overview-stats"><div><div class="overview-value">' + active.toLocaleString() + '</div><div class="overview-label">Seen this week</div></div>' +
         '<div><div class="overview-value">' + total.toLocaleString() + '</div><div class="overview-label">All-time installs</div></div></div></button>';
     }).join('') : '<span class="empty-text">No projects have reported telemetry yet.</span>';
     el('overview-grid').querySelectorAll('.overview-card').forEach(function (card) {
@@ -1337,13 +1303,6 @@ function dashboardHtml(): string {
     });
   }
 
-  function renderWindowPicker() {
-    el('window-btn-label').textContent = windowDays + 'd';
-    document.querySelectorAll('#window-menu .dropdown-item').forEach(function (item) {
-      item.classList.toggle('active', parseInt(item.dataset.value, 10) === windowDays);
-    });
-  }
-
   function renderStatCards() {
     var now = Date.now();
     var activeCount = 0, staleCount = 0, newTodayCount = 0;
@@ -1354,11 +1313,10 @@ function dashboardHtml(): string {
       else staleCount++;
       if (isNewToday(i.first_seen)) newTodayCount++;
     });
-    el('stat-active').textContent = (selectedSummary.active_recent ?? activeCount).toLocaleString();
-    el('stat-retained').textContent = (selectedSummary.active_30d ?? selectedSummary.active ?? counted.length).toLocaleString();
+    el('stat-active').textContent = activeCount.toLocaleString();
+    el('stat-retained').textContent = staleCount.toLocaleString();
     el('stat-total').textContent = (selectedSummary.total ?? counted.length).toLocaleString();
-    el('stat-new').textContent = (selectedSummary.new_today ?? newTodayCount).toLocaleString();
-    el('stat-stale').textContent = staleCount.toLocaleString();
+    el('stat-new').textContent = newTodayCount.toLocaleString();
     document.querySelectorAll('.stat-card').forEach(function (card) {
       card.classList.toggle('stat-card--active', card.dataset.filter === cardFilter);
     });
@@ -1370,15 +1328,6 @@ function dashboardHtml(): string {
     var latest = source.slice().sort(function (a, b) {
       return new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime();
     })[0];
-    var covered = 0;
-    var trackedFields = ['version', 'os', 'channel'];
-    source.forEach(function (install) {
-      trackedFields.forEach(function (field) {
-        if (install[field] != null && install[field] !== '') covered++;
-      });
-    });
-    var possible = source.length * trackedFields.length;
-    var coverage = possible ? Math.round(covered / possible * 100) : 0;
     var latestVersion = latest && latest.version ? latest.version : '—';
     var latestCheckIn = latest && latest.last_seen ? relTime(latest.last_seen) : 'No check-ins';
     var latestTitle = latest && latest.last_seen ? fmtDate(latest.last_seen) : '';
@@ -1387,8 +1336,7 @@ function dashboardHtml(): string {
     el('project-health-grid').innerHTML =
       '<div class="health-item"><div class="health-value health-value--good" title="' + esc(latestTitle) + '">' + esc(latestCheckIn) + '</div><div class="health-label">Latest check-in</div></div>' +
       '<div class="health-item"><div class="health-value" title="Latest reporting install">' + esc(latestVersion) + '</div><div class="health-label">Latest version</div></div>' +
-      '<div class="health-item"><div class="health-value">' + active.length.toLocaleString() + ' / ' + source.length.toLocaleString() + '</div><div class="health-label">Active / reporting installs</div></div>' +
-      '<div class="health-item"><div class="health-value">' + coverage + '%</div><div class="health-label">Core data coverage</div></div>';
+      '<div class="health-item"><div class="health-value">' + active.length.toLocaleString() + ' / ' + source.length.toLocaleString() + '</div><div class="health-label">Seen this week / reporting installs</div></div>';
   }
 
   function renderChart() {
@@ -1569,11 +1517,11 @@ function dashboardHtml(): string {
     var now = Date.now();
     var source = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls;
     var base;
-    if (cardFilter === 'active') {
+    if (cardFilter === 'recent') {
       base = source.filter(function (i) { return isActiveAt(i, now); });
-    } else if (cardFilter === 'stale') {
+    } else if (cardFilter === 'inactive') {
       base = source.filter(function (i) { return !isActiveAt(i, now); });
-    } else if (cardFilter === 'new_today') {
+    } else if (cardFilter === 'new_week') {
       base = source.filter(function (i) { return isNewToday(i.first_seen); });
     } else {
       base = source.slice();
@@ -1828,23 +1776,6 @@ function dashboardHtml(): string {
 
   document.addEventListener('click', function (e) {
     if (!e.target.closest('.dropdown-wrap')) closeDropdowns();
-  });
-
-  el('window-btn').addEventListener('click', function (e) {
-    e.stopPropagation();
-    var menu = el('window-menu');
-    var wasOpen = !menu.classList.contains('hidden');
-    closeDropdowns();
-    if (!wasOpen) menu.classList.remove('hidden');
-  });
-
-  el('window-menu').querySelectorAll('.dropdown-item').forEach(function (item) {
-    item.addEventListener('click', function () {
-      windowDays = parseInt(item.dataset.value, 10);
-      localStorage.setItem('beacon_window_days', String(windowDays));
-      closeDropdowns();
-      render();
-    });
   });
 
   ['filter-version', 'filter-arch', 'filter-os', 'filter-channel', 'filter-perpage'].forEach(function (id) {
