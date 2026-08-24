@@ -1102,7 +1102,7 @@ function dashboardHtml(): string {
   }
   function showDashboard() {
     el('login-page').style.display = 'none';
-    el('dashboard-page').style.display = 'block';
+    el('dashboard-page').style.display = 'grid';
   }
 
   if (token) { showDashboard(); loadData(token); renderDevToggle(); }
