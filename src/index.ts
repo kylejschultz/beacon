@@ -614,7 +614,7 @@ function dashboardHtml(): string {
 
     /* ---- App shell ---- */
     .app-shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
-    .sidebar { background: #10161f; border-right: 1px solid #21293a; padding: 1.35rem 1rem; display: flex; flex-direction: column; gap: 2rem; }
+    .sidebar { background: #10161f; border-right: 1px solid #21293a; padding: 1.35rem 1rem; display: flex; flex-direction: column; gap: 1.35rem; }
     .sidebar-logo { display: flex; align-items: center; gap: 0.5rem; padding: 0 0.5rem; }
     .sidebar-section-label { color: #64748b; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; padding: 0 0.5rem; margin-bottom: 0.5rem; }
     .project-nav { display: grid; gap: 0.25rem; }
@@ -622,7 +622,8 @@ function dashboardHtml(): string {
     .project-nav-item:hover { background: rgba(148,163,184,0.08); color: #e2e8f0; }
     .project-nav-item.active { background: rgba(34,211,238,0.1); border-color: rgba(34,211,238,0.18); color: #67e8f9; }
     .project-nav-icon { color: #22d3ee; font-size: 1rem; }
-    .sidebar-footer { margin-top: auto; padding: 0 0.25rem; }
+    .sidebar-controls { padding: 0 0.25rem; }
+    .sidebar-controls .pill-btn { width: 100%; justify-content: center; }
     .content { min-width: 0; }
     .content-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.25rem 2rem; border-bottom: 1px solid #21293a; }
     .page-title { font-size: 1.1rem; font-weight: 650; color: #f1f5f9; }
@@ -780,8 +781,10 @@ function dashboardHtml(): string {
     @media (max-width: 800px) {
       .app-shell { grid-template-columns: 1fr; }
       .sidebar { border-right: none; border-bottom: 1px solid #21293a; padding: 0.9rem 1rem; gap: 0.9rem; }
-      .sidebar-section-label, .sidebar-footer { display: none; }
+      .sidebar-section-label { display: none; }
       .sidebar-logo { padding: 0; }
+      .sidebar-controls { padding: 0; }
+      .sidebar-controls .pill-btn { width: auto; }
       .project-nav { display: flex; overflow-x: auto; }
       .project-nav-item { width: auto; white-space: nowrap; }
       .content-header { padding: 1rem 1.25rem; }
@@ -812,12 +815,12 @@ function dashboardHtml(): string {
       <span class="logo-dot"></span>
       <span class="logo-text">beacon</span>
     </div>
+    <div class="sidebar-controls">
+      <button class="pill-btn" id="dev-toggle"></button>
+    </div>
     <div>
       <div class="sidebar-section-label">Projects</div>
       <nav class="project-nav" id="project-nav"></nav>
-    </div>
-    <div class="sidebar-footer">
-      <button class="pill-btn" id="dev-toggle"></button>
     </div>
   </aside>
 
