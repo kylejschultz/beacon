@@ -765,19 +765,19 @@ function dashboardHtml(): string {
 
     /* ---- Install table ---- */
     .install-table-wrap { overflow: visible; }
-    .install-list-header { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; gap: 0.65rem; align-items: center; padding: 0 0.9rem 0.55rem; color: #64748b; font-size: 0.68rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+    .install-list-header { display: grid; grid-template-columns: 18px minmax(0, 1fr) 7rem 8rem; gap: 1.25rem; align-items: center; padding: 0 0.9rem 0.55rem; color: #64748b; font-size: 0.68rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
     .install-sort-btn { appearance: none; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; letter-spacing: inherit; text-transform: inherit; padding: 0; text-align: right; }
     .install-sort-btn:hover, .install-sort-btn.active { color: #67e8f9; }
     .install-table, .install-table tbody { display: block; width: 100%; }
     .install-table thead, .install-table colgroup { display: none; }
     .install-table tbody { display: grid; gap: 0.6rem; }
-    .install-table tbody tr.install-data-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; grid-template-areas: 'chevron install version seen'; align-items: center; gap: 0.65rem; cursor: pointer; background: #111822; border: 1px solid #21293a; border-radius: 8px; padding: 0.8rem 0.9rem; }
+    .install-table tbody tr.install-data-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) 7rem 8rem; grid-template-areas: 'chevron install version seen'; align-items: center; gap: 1.25rem; cursor: pointer; background: #111822; border: 1px solid #21293a; border-radius: 8px; padding: 0.8rem 0.9rem; }
     .install-table tbody tr.install-data-row:hover, .install-table tbody tr.row-expanded { border-color: rgba(34,211,238,0.45); background: rgba(34,211,238,0.04); }
     .install-table td { padding: 0; border: 0; min-width: 0; font-size: 0.82rem; color: #cbd5e1; }
     .install-table td.col-chevron { grid-area: chevron; color: #64748b; font-size: 0.65rem; }
     .install-table td.col-installid { grid-area: install; }
-    .install-table td.col-version { grid-area: version; color: #67e8f9; }
-    .install-table td.col-lastseen { grid-area: seen; color: #94a3b8; }
+    .install-table td.col-version { grid-area: version; color: #67e8f9; text-align: right; }
+    .install-table td.col-lastseen { grid-area: seen; color: #94a3b8; text-align: right; }
     .install-table td.col-os, .install-table td.col-arch, .install-table td.col-firstseen { display: none; }
     .install-table tbody tr.install-detail-row { display: block; }
     .install-table tbody tr.install-detail-row > td { display: block; padding: 0; cursor: default; }
@@ -789,6 +789,9 @@ function dashboardHtml(): string {
     .detail-key { font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
     .detail-val { font-size: 0.82rem; color: #e2e8f0; word-break: break-all; overflow-wrap: anywhere; }
     .detail-mono { font-family: monospace; font-size: 0.76rem; }
+    @media (max-width: 640px) {
+      .install-list-header, .install-table tbody tr.install-data-row { grid-template-columns: 16px minmax(0, 1fr) 4.25rem 4.75rem; gap: 0.5rem; padding-left: 0.7rem; padding-right: 0.7rem; }
+    }
     .empty-row { font-size: 0.85rem; color: #64748b; padding: 1rem 0.6rem; }
     .pagination { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0 0; justify-content: center; }
     .pagination-btn { display: inline-flex; align-items: center; background: transparent; border: 1px solid #21293a; color: #64748b; border-radius: 20px; padding: 0.3rem 0.75rem; font-size: 0.82rem; cursor: pointer; }
