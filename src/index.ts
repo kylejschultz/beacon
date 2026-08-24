@@ -713,20 +713,18 @@ function dashboardHtml(): string {
       background: #161b22; border: 1px solid #21293a; border-radius: 8px;
       padding: 1.25rem; margin-bottom: 1.5rem;
     }
-    .breakdown-wrap-header { margin-bottom: 0.75rem; }
+    .breakdown-wrap-header { margin-bottom: 1rem; }
     .breakdown-wrap-title { font-size: 0.82rem; color: #64748b; }
-    .breakdown-section { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; }
-    @media (max-width: 980px) { .breakdown-section { grid-template-columns: 1fr 1fr 1fr; } }
+    .breakdown-section { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    @media (max-width: 980px) { .breakdown-section { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 700px) { .breakdown-section { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 460px) { .breakdown-section { grid-template-columns: 1fr; } }
-    .breakdown-card { background: #161b22; border: 1px solid #21293a; border-radius: 8px; padding: 1rem; }
+    .breakdown-card { min-width: 0; }
     .breakdown-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 0.75rem; }
-    .breakdown-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
-    .breakdown-label { min-width: 52px; font-size: 0.8rem; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-    .breakdown-bar-track { flex: 1; height: 3px; background: #21293a; border-radius: 2px; overflow: hidden; }
-    .breakdown-bar { height: 100%; background: #22d3ee; border-radius: 2px; transition: width 0.3s ease; }
-    .breakdown-pct { font-size: 0.75rem; color: #64748b; width: 32px; text-align: right; flex-shrink: 0; }
-    .breakdown-value { font-size: 0.75rem; color: #64748b; width: 64px; text-align: right; flex-shrink: 0; }
+    .running-tags { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+    .running-tag { display: inline-flex; align-items: center; gap: 0.4rem; max-width: 100%; color: #cbd5e1; background: #1c2230; border: 1px solid #293244; border-radius: 6px; padding: 0.32rem 0.48rem; font-size: 0.78rem; }
+    .running-tag-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .running-tag-count { color: #67e8f9; font-size: 0.72rem; }
     .empty-text { font-size: 0.8rem; color: #64748b; }
 
     /* ---- Details section ---- */
@@ -766,34 +764,20 @@ function dashboardHtml(): string {
     .dropdown-item.active { color: #22d3ee; }
 
     /* ---- Install table ---- */
-    .install-table-wrap { overflow-x: auto; }
-    .install-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
-    .install-table th {
-      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
-      color: #64748b; padding: 0 0.6rem 0.6rem; text-align: left; font-weight: 500;
-      white-space: nowrap; border-bottom: 1px solid #21293a;
-      position: relative; overflow: hidden;
-    }
-    .th-resize-handle {
-      position: absolute; top: 0; right: 0; width: 2px; height: 100%;
-      cursor: col-resize; background: #21293a; z-index: 1;
-    }
-    .th-resize-handle:hover, .th-resize-handle.dragging { background: #22d3ee; }
-    @media (max-width: 640px) { .th-resize-handle { display: none; } }
-    .install-table th.th-sortable { cursor: pointer; user-select: none; }
-    .install-table th.th-sortable:hover { color: #94a3b8; }
-    .install-table th.col-chevron { width: 32px; padding-right: 0; }
-    .sort-active { color: #22d3ee; }
-    .sort-inactive { opacity: 0.3; font-size: 0.8em; }
-    .install-table td {
-      padding: 0.7rem 0.6rem; border-top: 1px solid #21293a;
-      font-size: 0.85rem; color: #e2e8f0; white-space: nowrap;
-    }
-    .install-table td.col-chevron { color: #64748b; font-size: 0.7rem; text-align: center; padding-right: 0; }
-    .install-table tbody tr.install-data-row { cursor: pointer; }
-    .install-table tbody tr.install-data-row:hover td { background: rgba(255,255,255,0.02); }
-    .install-table tbody tr.row-expanded td { background: rgba(34,211,238,0.03); }
-    .install-table tbody tr.install-detail-row > td { padding: 0; cursor: default; background: none !important; border-top: none; }
+    .install-table-wrap { overflow: visible; }
+    .install-table, .install-table tbody { display: block; width: 100%; }
+    .install-table thead, .install-table colgroup { display: none; }
+    .install-table tbody { display: grid; gap: 0.6rem; }
+    .install-table tbody tr.install-data-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; grid-template-areas: 'chevron install version seen'; align-items: center; gap: 0.65rem; cursor: pointer; background: #111822; border: 1px solid #21293a; border-radius: 8px; padding: 0.8rem 0.9rem; }
+    .install-table tbody tr.install-data-row:hover, .install-table tbody tr.row-expanded { border-color: rgba(34,211,238,0.45); background: rgba(34,211,238,0.04); }
+    .install-table td { padding: 0; border: 0; min-width: 0; font-size: 0.82rem; color: #cbd5e1; }
+    .install-table td.col-chevron { grid-area: chevron; color: #64748b; font-size: 0.65rem; }
+    .install-table td.col-installid { grid-area: install; }
+    .install-table td.col-version { grid-area: version; color: #67e8f9; }
+    .install-table td.col-lastseen { grid-area: seen; color: #94a3b8; }
+    .install-table td.col-os, .install-table td.col-arch, .install-table td.col-firstseen { display: none; }
+    .install-table tbody tr.install-detail-row { display: block; }
+    .install-table tbody tr.install-detail-row > td { display: block; padding: 0; cursor: default; }
     .install-id-cell { font-family: monospace; font-size: 0.85rem; color: #22d3ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .install-detail-panel { background: #1c2230; border-top: 1px solid #21293a; padding: 0.85rem 1rem; }
     .detail-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem 1rem; }
@@ -808,9 +792,7 @@ function dashboardHtml(): string {
     .pagination-btn:hover:not([disabled]) { border-color: #475569; color: #e2e8f0; }
     .pagination-btn[disabled] { opacity: 0.4; cursor: default; }
     .pagination-info { font-size: 0.82rem; color: #64748b; }
-    @media (max-width: 640px) {
-      .col-os, .col-arch, .col-lastseen { display: none; }
-    }
+    @media (max-width: 640px) { .install-table tbody tr.install-data-row { grid-template-columns: 18px minmax(0, 1fr) auto; grid-template-areas: 'chevron install seen' 'chevron version version'; } }
     .dev-badge {
       display: inline-flex; align-items: center;
       background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.3);
@@ -914,7 +896,7 @@ function dashboardHtml(): string {
 
     <div class="breakdown-wrap">
       <div class="breakdown-wrap-header">
-        <span class="breakdown-wrap-title">Breakdown</span>
+        <span class="breakdown-wrap-title">What’s running</span>
       </div>
       <div class="breakdown-section">
         <div class="breakdown-card">
@@ -1528,12 +1510,9 @@ function dashboardHtml(): string {
         .filter(function (v) { return typeof v === 'number' && isFinite(v); });
       if (values.length === 0) return null;
       var avg = Math.round(values.reduce(function (sum, v) { return sum + v; }, 0) / values.length);
-      return '<div class="breakdown-row">' +
-        '<span class="breakdown-label" title="' + esc(field[1]) + '">' + esc(field[1]) + '</span>' +
-        '<div class="breakdown-bar-track"><div class="breakdown-bar" style="width:100%"></div></div>' +
-        '<span class="breakdown-value" title="Average">' + avg.toLocaleString() + '</span></div>';
+      return '<span class="running-tag"><span class="running-tag-label">' + esc(field[1]) + '</span><span class="running-tag-count">' + avg.toLocaleString() + '</span></span>';
     }).filter(Boolean);
-    container.innerHTML = rows.length ? rows.join('') : '<span class="empty-text">No data</span>';
+    container.innerHTML = rows.length ? '<div class="running-tags">' + rows.join('') + '</div>' : '<span class="empty-text">No data</span>';
   }
 
   function renderDist(containerId, dist, total, sortByVersion) {
@@ -1542,13 +1521,9 @@ function dashboardHtml(): string {
     if (sortByVersion) entries.sort(function (a, b) { return semverSort(a[0], b[0]); });
     else entries.sort(function (a, b) { return b[1] - a[1]; });
     if (entries.length === 0) { container.innerHTML = '<span class="empty-text">No data</span>'; return; }
-    container.innerHTML = entries.map(function (pair) {
-      var pct = total > 0 ? Math.round(pair[1] / total * 100) : 0;
-      return '<div class="breakdown-row">' +
-        '<span class="breakdown-label" title="' + esc(pair[0]) + '">' + esc(pair[0]) + '</span>' +
-        '<div class="breakdown-bar-track"><div class="breakdown-bar" style="width:' + pct + '%"></div></div>' +
-        '<span class="breakdown-pct">' + pct + '%</span></div>';
-    }).join('');
+    container.innerHTML = '<div class="running-tags">' + entries.map(function (pair) {
+      return '<span class="running-tag" title="' + esc(pair[0]) + '"><span class="running-tag-label">' + esc(pair[0]) + '</span><span class="running-tag-count">' + pair[1] + '</span></span>';
+    }).join('') + '</div>';
   }
 
   function renderInstallDetails() {
