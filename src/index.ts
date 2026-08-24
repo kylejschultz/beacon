@@ -765,6 +765,9 @@ function dashboardHtml(): string {
 
     /* ---- Install table ---- */
     .install-table-wrap { overflow: visible; }
+    .install-list-header { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; gap: 0.65rem; align-items: center; padding: 0 0.9rem 0.55rem; color: #64748b; font-size: 0.68rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+    .install-sort-btn { appearance: none; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; letter-spacing: inherit; text-transform: inherit; padding: 0; text-align: right; }
+    .install-sort-btn:hover, .install-sort-btn.active { color: #67e8f9; }
     .install-table, .install-table tbody { display: block; width: 100%; }
     .install-table thead, .install-table colgroup { display: none; }
     .install-table tbody { display: grid; gap: 0.6rem; }
@@ -792,7 +795,7 @@ function dashboardHtml(): string {
     .pagination-btn:hover:not([disabled]) { border-color: #475569; color: #e2e8f0; }
     .pagination-btn[disabled] { opacity: 0.4; cursor: default; }
     .pagination-info { font-size: 0.82rem; color: #64748b; }
-    @media (max-width: 640px) { .install-table tbody tr.install-data-row { grid-template-columns: 18px minmax(0, 1fr) auto; grid-template-areas: 'chevron install seen' 'chevron version version'; } }
+    @media (max-width: 640px) { .install-list-header { grid-template-columns: 18px minmax(0, 1fr) auto; } .install-list-header .version-header { display: none; } .install-table tbody tr.install-data-row { grid-template-columns: 18px minmax(0, 1fr) auto; grid-template-areas: 'chevron install seen' 'chevron version version'; } }
     .dev-badge {
       display: inline-flex; align-items: center;
       background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.3);
@@ -976,6 +979,11 @@ function dashboardHtml(): string {
             </div>
           </div>
         </div>
+        <div class="install-list-header" id="install-list-header">
+          <span></span><span>Install</span>
+          <button class="install-sort-btn version-header" data-sort="version">Version</button>
+          <button class="install-sort-btn" data-sort="last_seen">Last seen</button>
+        </div>
         <div class="install-table-wrap">
           <table class="install-table">
             <colgroup id="install-colgroup">
@@ -1022,11 +1030,6 @@ function dashboardHtml(): string {
   var RECENT_MS = 7 * 24 * 3600000;
   var MIN_COL_WIDTH = 48;
   var projectProfiles = {
-    nestview: {
-      breakdownTitle: 'Containers',
-      breakdownFields: [['container_count', 'Containers']],
-      detailFields: [['container_count', 'container_count']]
-    },
     prism: {
       breakdownTitle: 'Library Size',
       breakdownFields: [
@@ -1620,6 +1623,18 @@ function dashboardHtml(): string {
     var tbody = el('install-tbody');
     var paginationBar = el('pagination-bar');
     var total = installs.length;
+    el('install-list-header').querySelectorAll('[data-sort]').forEach(function (button) {
+      var key = button.dataset.sort;
+      var label = key === 'last_seen' ? 'Last seen' : 'Version';
+      button.textContent = label + (sortCol === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+      button.classList.toggle('active', sortCol === key);
+      button.onclick = function () {
+        if (sortCol === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        else { sortCol = key; sortDir = key === 'last_seen' ? 'desc' : 'asc'; }
+        currentPage = 1;
+        renderInstallTable(currentFiltered);
+      };
+    });
 
     var cols = [
       { key: null, label: '', cls: 'col-chevron', sortable: false },
