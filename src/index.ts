@@ -627,6 +627,11 @@ function dashboardHtml(): string {
     .sidebar-section-label { color: #64748b; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; padding: 0 0.5rem; margin-bottom: 0.5rem; }
     .project-nav { display: grid; gap: 0.25rem; }
     .overview-nav { margin-bottom: 0.35rem; }
+    .project-nav-group { display: grid; gap: 0.2rem; }
+    .project-subnav { display: grid; gap: 0.15rem; margin: 0 0 0.2rem 1.55rem; padding-left: 0.7rem; border-left: 1px solid #263244; }
+    .project-subnav-item { border: 0; background: transparent; color: #64748b; cursor: pointer; font-size: 0.78rem; padding: 0.35rem 0.25rem; text-align: left; }
+    .project-subnav-item:hover, .project-subnav-item.active { color: #67e8f9; }
+    .project-nav-chevron { margin-left: auto; color: #64748b; font-size: 0.75rem; }
     .project-nav-item { display: flex; align-items: center; width: 100%; gap: 0.65rem; border: 1px solid transparent; border-radius: 7px; padding: 0.62rem 0.7rem; color: #94a3b8; background: transparent; cursor: pointer; font-size: 0.9rem; text-align: left; }
     .project-nav-item:hover { background: rgba(148,163,184,0.08); color: #e2e8f0; }
     .project-nav-item.active { background: rgba(34,211,238,0.1); border-color: rgba(34,211,238,0.18); color: #67e8f9; }
@@ -870,6 +875,7 @@ function dashboardHtml(): string {
       <div class="overview-grid" id="overview-grid"></div>
     </section>
     <div id="project-dashboard">
+    <div id="project-overview-content">
     <div class="stat-cards">
       <div class="stat-card" data-filter="recent">
         <div class="stat-value" id="stat-active">-</div>
@@ -923,6 +929,7 @@ function dashboardHtml(): string {
           <div id="breakdown-project-stats"></div>
         </div>
       </div>
+    </div>
     </div>
 
     <div id="details-section" class="details-section">
@@ -1010,6 +1017,7 @@ function dashboardHtml(): string {
   var projectSummaries = {};
   var selectedProject = localStorage.getItem('beacon_project') || 'nestview';
   var selectedView = localStorage.getItem('beacon_view') || 'overview';
+  var projectPage = localStorage.getItem('beacon_project_page') || 'overview';
   var excludeDev = localStorage.getItem('beacon_exclude_dev') !== 'false';
   var cardFilter = 'all';
   var detailFilters = { version: null, arch: null, os: null, channel: null };
@@ -1219,13 +1227,19 @@ function dashboardHtml(): string {
     }
     el('overview-page').hidden = true;
     el('project-dashboard').hidden = false;
+    var showingInstalls = projectPage === 'installs';
     el('project-heading').textContent = projectLabel(selectedProject);
-    el('project-subtitle').textContent = 'Installation telemetry and project health';
-    renderStatCards();
-    renderProjectHealth();
-    renderBreakdowns();
-    renderInstallDetails();
-    renderFilterSelector();
+    el('project-subtitle').textContent = showingInstalls ? 'Installation details and reporting history' : 'Installation telemetry and project health';
+    el('project-overview-content').hidden = showingInstalls;
+    el('details-section').hidden = !showingInstalls;
+    if (showingInstalls) {
+      renderInstallDetails();
+      renderFilterSelector();
+    } else {
+      renderStatCards();
+      renderProjectHealth();
+      renderBreakdowns();
+    }
   }
 
   function renderDevToggle() {
@@ -1243,21 +1257,40 @@ function dashboardHtml(): string {
     };
     el('project-nav').innerHTML = available.map(function (project) {
       var active = selectedView === 'project' && project === selectedProject ? ' active' : '';
-      return '<button class="project-nav-item' + active + '" data-value="' + esc(project) + '">' +
-        '<i class="ti ti-chart-dots-3 project-nav-icon"></i>' + esc(projectLabel(project)) + '</button>';
+      var expanded = selectedView === 'project' && project === selectedProject;
+      return '<div class="project-nav-group"><button class="project-nav-item' + active + '" data-project="' + esc(project) + '">' +
+        '<i class="ti ti-chart-dots-3 project-nav-icon"></i>' + esc(projectLabel(project)) +
+        '<i class="ti ti-chevron-' + (expanded ? 'down' : 'right') + ' project-nav-chevron"></i></button>' +
+        (expanded ? '<div class="project-subnav">' +
+          '<button class="project-subnav-item' + (projectPage === 'overview' ? ' active' : '') + '" data-project="' + esc(project) + '" data-page="overview">Overview</button>' +
+          '<button class="project-subnav-item' + (projectPage === 'installs' ? ' active' : '') + '" data-project="' + esc(project) + '" data-page="installs">Installs</button>' +
+        '</div>' : '') + '</div>';
     }).join('');
 
     el('project-nav').querySelectorAll('.project-nav-item').forEach(function (item) {
       item.addEventListener('click', function () {
-        selectedProject = item.dataset.value || 'nestview';
+        selectedProject = item.dataset.project || 'nestview';
         selectedView = 'project';
+        projectPage = 'overview';
         localStorage.setItem('beacon_project', selectedProject);
         localStorage.setItem('beacon_view', selectedView);
+        localStorage.setItem('beacon_project_page', projectPage);
         cardFilter = 'all';
         detailFilters = { version: null, arch: null, os: null, channel: null };
         expandedInstallId = null;
         currentPage = 1;
         closeDropdowns();
+        loadData(token);
+      });
+    });
+    el('project-nav').querySelectorAll('.project-subnav-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        selectedProject = item.dataset.project || 'nestview';
+        selectedView = 'project';
+        projectPage = item.dataset.page || 'overview';
+        localStorage.setItem('beacon_project', selectedProject);
+        localStorage.setItem('beacon_view', selectedView);
+        localStorage.setItem('beacon_project_page', projectPage);
         loadData(token);
       });
     });
@@ -1283,8 +1316,10 @@ function dashboardHtml(): string {
       card.addEventListener('click', function () {
         selectedProject = card.dataset.project || 'nestview';
         selectedView = 'project';
+        projectPage = 'overview';
         localStorage.setItem('beacon_project', selectedProject);
         localStorage.setItem('beacon_view', selectedView);
+        localStorage.setItem('beacon_project_page', projectPage);
         loadData(token);
       });
     });
@@ -1813,6 +1848,11 @@ function dashboardHtml(): string {
     card.addEventListener('click', function () {
       cardFilter = card.dataset.filter;
       currentPage = 1;
+      projectPage = 'installs';
+      localStorage.setItem('beacon_project_page', projectPage);
+      document.querySelectorAll('.project-subnav-item').forEach(function (item) {
+        item.classList.toggle('active', item.dataset.page === 'installs');
+      });
       setTimeout(function () {
         el('details-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 50);
