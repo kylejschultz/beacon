@@ -618,10 +618,22 @@ function dashboardHtml(): string {
     .login-card button[type="submit"]:hover { opacity: 0.9; }
     #login-error { color: #f87171; font-size: 0.85rem; margin-top: 0.6rem; display: none; }
 
-    /* ---- Header ---- */
-    header { display: flex; align-items: center; padding: 1rem 1.5rem; border-bottom: 1px solid #21293a; }
-    .header-logo { display: flex; align-items: center; gap: 0.5rem; }
-    .header-actions { display: inline-flex; align-items: center; gap: 0.6rem; margin-left: 1rem; }
+    /* ---- App shell ---- */
+    .app-shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
+    .sidebar { background: #10161f; border-right: 1px solid #21293a; padding: 1.35rem 1rem; display: flex; flex-direction: column; gap: 2rem; }
+    .sidebar-logo { display: flex; align-items: center; gap: 0.5rem; padding: 0 0.5rem; }
+    .sidebar-section-label { color: #64748b; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; padding: 0 0.5rem; margin-bottom: 0.5rem; }
+    .project-nav { display: grid; gap: 0.25rem; }
+    .project-nav-item { display: flex; align-items: center; width: 100%; gap: 0.65rem; border: 1px solid transparent; border-radius: 7px; padding: 0.62rem 0.7rem; color: #94a3b8; background: transparent; cursor: pointer; font-size: 0.9rem; text-align: left; }
+    .project-nav-item:hover { background: rgba(148,163,184,0.08); color: #e2e8f0; }
+    .project-nav-item.active { background: rgba(34,211,238,0.1); border-color: rgba(34,211,238,0.18); color: #67e8f9; }
+    .project-nav-icon { color: #22d3ee; font-size: 1rem; }
+    .sidebar-footer { margin-top: auto; padding: 0 0.25rem; }
+    .content { min-width: 0; }
+    .content-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.25rem 2rem; border-bottom: 1px solid #21293a; }
+    .page-title { font-size: 1.1rem; font-weight: 650; color: #f1f5f9; }
+    .page-subtitle { color: #64748b; font-size: 0.82rem; margin-top: 0.22rem; }
+    .header-actions { display: inline-flex; align-items: center; gap: 0.6rem; }
     .pill-btn {
       display: inline-flex; align-items: center; gap: 0.4rem;
       background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.2);
@@ -636,10 +648,10 @@ function dashboardHtml(): string {
     }
 
     /* ---- Main ---- */
-    main { max-width: 960px; width: 100%; margin: 0 auto; padding: 1.5rem; }
+    main { max-width: 1320px; width: 100%; margin: 0 auto; padding: 2rem; }
 
     /* ---- Stat cards ---- */
-    .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    .stat-cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
     @media (max-width: 800px) { .stat-cards { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 420px) { .stat-cards { grid-template-columns: 1fr; } }
     .stat-card {
@@ -771,6 +783,17 @@ function dashboardHtml(): string {
       color: #fbbf24; border-radius: 20px; padding: 0.1rem 0.45rem;
       font-size: 0.7rem; font-weight: 600; margin-left: 0.35rem; vertical-align: middle;
     }
+    @media (max-width: 800px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .sidebar { border-right: none; border-bottom: 1px solid #21293a; padding: 0.9rem 1rem; gap: 0.9rem; }
+      .sidebar-section-label, .sidebar-footer { display: none; }
+      .sidebar-logo { padding: 0; }
+      .project-nav { display: flex; overflow-x: auto; }
+      .project-nav-item { width: auto; white-space: nowrap; }
+      .content-header { padding: 1rem 1.25rem; }
+      main { padding: 1.25rem; }
+    }
+    @media (max-width: 520px) { .content-header { align-items: flex-start; } .page-subtitle { display: none; } }
   </style>
 </head>
 <body>
@@ -789,26 +812,32 @@ function dashboardHtml(): string {
   </div>
 </div>
 
-<div id="dashboard-page" style="display:none">
-  <header>
-    <div class="header-logo">
+<div id="dashboard-page" style="display:none" class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
       <span class="logo-dot"></span>
       <span class="logo-text">beacon</span>
-      <span class="pill-badge" id="project-badge">nestview</span>
     </div>
-    <div class="header-actions">
-      <div class="dropdown-wrap">
-        <button class="pill-btn" id="project-btn">
-          <span id="project-btn-label">nestview</span>
-          <i class="ti ti-chevron-down"></i>
-        </button>
-        <div class="dropdown-menu hidden" id="project-menu"></div>
-      </div>
+    <div>
+      <div class="sidebar-section-label">Projects</div>
+      <nav class="project-nav" id="project-nav"></nav>
+    </div>
+    <div class="sidebar-footer">
       <button class="pill-btn" id="dev-toggle"></button>
     </div>
-  </header>
+  </aside>
 
-  <main>
+  <div class="content">
+    <header class="content-header">
+      <div>
+        <div class="page-title" id="project-heading">Nestview</div>
+        <div class="page-subtitle">Installation telemetry and project health</div>
+      </div>
+      <div class="header-actions">
+        <span class="pill-badge">Live data</span>
+      </div>
+    </header>
+    <main>
     <div class="stat-cards">
       <div class="stat-card" data-filter="active">
         <div class="stat-value" id="stat-active">-</div>
@@ -951,7 +980,8 @@ function dashboardHtml(): string {
         <div id="pagination-bar"></div>
       </div>
     </div>
-  </main>
+    </main>
+  </div>
 </div>
 
 <script>
@@ -1161,15 +1191,15 @@ function dashboardHtml(): string {
   }
 
   function renderProjectPicker(projects) {
-    el('project-badge').textContent = projectLabel(selectedProject);
-    el('project-btn-label').textContent = projectLabel(selectedProject);
-    el('project-menu').innerHTML = projects.length
-      ? projects.map(function (project) {
-          return '<div class="dropdown-item' + (project === selectedProject ? ' active' : '') + '" data-value="' + esc(project) + '">' + esc(projectLabel(project)) + '</div>';
-        }).join('')
-      : '<div class="dropdown-item active" data-value="nestview">nestview</div>';
+    var available = projects.length ? projects : ['nestview'];
+    el('project-heading').textContent = projectLabel(selectedProject);
+    el('project-nav').innerHTML = available.map(function (project) {
+      var active = project === selectedProject ? ' active' : '';
+      return '<button class="project-nav-item' + active + '" data-value="' + esc(project) + '">' +
+        '<i class="ti ti-chart-dots-3 project-nav-icon"></i>' + esc(projectLabel(project)) + '</button>';
+    }).join('');
 
-    el('project-menu').querySelectorAll('.dropdown-item').forEach(function (item) {
+    el('project-nav').querySelectorAll('.project-nav-item').forEach(function (item) {
       item.addEventListener('click', function () {
         selectedProject = item.dataset.value || 'nestview';
         localStorage.setItem('beacon_project', selectedProject);
@@ -1659,14 +1689,6 @@ function dashboardHtml(): string {
   el('window-btn').addEventListener('click', function (e) {
     e.stopPropagation();
     var menu = el('window-menu');
-    var wasOpen = !menu.classList.contains('hidden');
-    closeDropdowns();
-    if (!wasOpen) menu.classList.remove('hidden');
-  });
-
-  el('project-btn').addEventListener('click', function (e) {
-    e.stopPropagation();
-    var menu = el('project-menu');
     var wasOpen = !menu.classList.contains('hidden');
     closeDropdowns();
     if (!wasOpen) menu.classList.remove('hidden');
