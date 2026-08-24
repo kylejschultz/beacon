@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS project_settings (
+  project TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  icon TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

@@ -135,6 +135,10 @@ export default {
       return handleProjects(request, env);
     }
 
+    if (request.method === "POST" && url.pathname === "/project-settings") {
+      return handleProjectSettings(request, env);
+    }
+
     if (request.method === "POST" && url.pathname === "/auth") {
       return handleAuth(request, env);
     }
@@ -566,18 +570,80 @@ async function handleProjects(request: Request, env: Env): Promise<Response> {
   }
 
   const result = await env.ANALYTICS_DB.prepare(
-    `SELECT project FROM installs
-     UNION
-     SELECT project FROM install_lifetime
-     UNION
-     SELECT project FROM install_history
-     ORDER BY project ASC`
-  ).all<{ project: string }>();
+    `SELECT p.project, ps.display_name, ps.icon FROM (
+       SELECT project FROM installs
+       UNION
+       SELECT project FROM install_lifetime
+       UNION
+       SELECT project FROM install_history
+     ) p
+     LEFT JOIN project_settings ps ON ps.project = p.project
+     ORDER BY p.project ASC`
+  ).all<{ project: string; display_name: string | null; icon: string | null }>();
 
   return new Response(JSON.stringify({
-    projects: result.results.map((row) => row.project),
+    projects: result.results,
   }), {
     status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+const PROJECT_ICONS = new Set([
+  "ti-chart-dots-3", "ti-box", "ti-device-desktop", "ti-music", "ti-server",
+  "ti-radio", "ti-code", "ti-app-window",
+]);
+
+async function handleProjectSettings(request: Request, env: Env): Promise<Response> {
+  if (!await verifyBearerJWT(request, env)) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  let body: { project?: unknown; display_name?: unknown; icon?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const project = typeof body.project === "string" ? body.project.trim() : "";
+  const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
+  const icon = typeof body.icon === "string" ? body.icon : "";
+  if (!project || project.length > MAX_FIELD_LENGTH || !displayName || displayName.length > 64 || !PROJECT_ICONS.has(icon)) {
+    return new Response(JSON.stringify({ error: "Invalid project settings" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const knownProject = await env.ANALYTICS_DB.prepare(
+    `SELECT 1 AS found FROM installs WHERE project = ?
+     UNION SELECT 1 AS found FROM install_lifetime WHERE project = ?
+     UNION SELECT 1 AS found FROM install_history WHERE project = ? LIMIT 1`
+  ).bind(project, project, project).first<{ found: number }>();
+  if (!knownProject) {
+    return new Response(JSON.stringify({ error: "Unknown project" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  await env.ANALYTICS_DB.prepare(
+    `INSERT INTO project_settings (project, display_name, icon, updated_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(project) DO UPDATE SET
+       display_name = excluded.display_name,
+       icon = excluded.icon,
+       updated_at = excluded.updated_at`
+  ).bind(project, displayName, icon).run();
+
+  return new Response(JSON.stringify({ project, display_name: displayName, icon }), {
     headers: { "Content-Type": "application/json" },
   });
 }
@@ -726,6 +792,23 @@ function dashboardHtml(): string {
     .running-tag-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .running-tag-count { color: #67e8f9; font-size: 0.72rem; }
     .empty-text { font-size: 0.8rem; color: #64748b; }
+
+    /* ---- Project settings ---- */
+    .settings-card { max-width: 620px; background: #161b22; border: 1px solid #21293a; border-radius: 8px; padding: 1.25rem; }
+    .settings-card-title { color: #f1f5f9; font-size: 1rem; font-weight: 650; margin-bottom: 0.35rem; }
+    .settings-card-note { color: #64748b; font-size: 0.82rem; margin-bottom: 1.5rem; }
+    .settings-field { display: grid; gap: 0.5rem; margin-bottom: 1.2rem; }
+    .settings-label { color: #94a3b8; font-size: 0.8rem; font-weight: 600; }
+    .settings-input { width: 100%; background: #0d1117; color: #e2e8f0; border: 1px solid #293244; border-radius: 6px; padding: 0.65rem 0.75rem; font: inherit; font-size: 0.9rem; outline: none; }
+    .settings-input:focus { border-color: #22d3ee; }
+    .icon-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .icon-choice { width: 2.45rem; height: 2.25rem; display: inline-flex; align-items: center; justify-content: center; background: #111822; color: #94a3b8; border: 1px solid #293244; border-radius: 6px; cursor: pointer; font-size: 1rem; }
+    .icon-choice:hover, .icon-choice.active { color: #67e8f9; border-color: #22d3ee; background: rgba(34,211,238,0.08); }
+    .settings-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 1.5rem; }
+    .settings-save { border: 0; background: #22d3ee; color: #0d1117; border-radius: 6px; padding: 0.58rem 0.85rem; font-size: 0.85rem; font-weight: 650; cursor: pointer; }
+    .settings-save:disabled { opacity: 0.55; cursor: default; }
+    .settings-status { color: #64748b; font-size: 0.8rem; }
+    .settings-status.error { color: #f87171; }
 
     /* ---- Details section ---- */
     .details-section { background: #161b22; border: 1px solid #21293a; border-radius: 8px; }
@@ -1005,6 +1088,26 @@ function dashboardHtml(): string {
         <div id="pagination-bar"></div>
       </div>
     </div>
+    <section id="settings-section" hidden>
+      <div class="settings-card">
+        <div class="settings-card-title">Project settings</div>
+        <p class="settings-card-note">Choose how this project appears throughout Beacon. Telemetry stays tied to its original project ID.</p>
+        <form id="project-settings-form">
+          <label class="settings-field">
+            <span class="settings-label">Friendly name</span>
+            <input class="settings-input" id="project-display-name" maxlength="64" required>
+          </label>
+          <div class="settings-field">
+            <span class="settings-label">Sidebar icon</span>
+            <div class="icon-picker" id="project-icon-picker"></div>
+          </div>
+          <div class="settings-actions">
+            <button class="settings-save" id="project-settings-save" type="submit">Save changes</button>
+            <span class="settings-status" id="project-settings-status" aria-live="polite"></span>
+          </div>
+        </form>
+      </div>
+    </section>
     </div>
     </main>
   </div>
@@ -1017,6 +1120,8 @@ function dashboardHtml(): string {
   var summary = {};
   var summaryExcludeDev = {};
   var projectSummaries = {};
+  var projectSettings = {};
+  var availableProjects = [];
   var selectedProject = localStorage.getItem('beacon_project') || 'nestview';
   var selectedView = localStorage.getItem('beacon_view') || 'overview';
   var projectPage = localStorage.getItem('beacon_project_page') || 'overview';
@@ -1047,6 +1152,10 @@ function dashboardHtml(): string {
       ]
     }
   };
+  var projectIconChoices = [
+    'ti-chart-dots-3', 'ti-box', 'ti-device-desktop', 'ti-music',
+    'ti-server', 'ti-radio', 'ti-code', 'ti-app-window'
+  ];
 
   function projectProfile() {
     return projectProfiles[selectedProject] || null;
@@ -1110,7 +1219,13 @@ function dashboardHtml(): string {
   }
 
   function projectLabel(project) {
-    return project || 'unknown';
+    var settings = projectSettings[project];
+    return (settings && settings.display_name) || project || 'unknown';
+  }
+
+  function projectIcon(project) {
+    var settings = projectSettings[project];
+    return (settings && settings.icon) || 'ti-chart-dots-3';
   }
 
   // ---- Auth ----
@@ -1163,7 +1278,17 @@ function dashboardHtml(): string {
       return response.json();
     }).then(function (data) {
       if (!data) return;
-      var projects = data.projects || [];
+      var projectRows = data.projects || [];
+      var projects = projectRows.map(function (row) {
+        return typeof row === 'string' ? row : row.project;
+      }).filter(Boolean);
+      projectSettings = {};
+      projectRows.forEach(function (row) {
+        if (typeof row !== 'string' && row.project) {
+          projectSettings[row.project] = { display_name: row.display_name || null, icon: row.icon || null };
+        }
+      });
+      availableProjects = projects;
       if (projects.length && projects.indexOf(selectedProject) < 0) {
         selectedProject = projects.indexOf('nestview') >= 0 ? 'nestview' : projects[0];
         localStorage.setItem('beacon_project', selectedProject);
@@ -1225,13 +1350,17 @@ function dashboardHtml(): string {
     el('overview-page').hidden = true;
     el('project-dashboard').hidden = false;
     var showingInstalls = projectPage === 'installs';
+    var showingSettings = projectPage === 'settings';
     el('project-heading').textContent = projectLabel(selectedProject);
-    el('project-subtitle').textContent = showingInstalls ? 'Installation details and reporting history' : 'Installation telemetry and project health';
-    el('project-overview-content').hidden = showingInstalls;
+    el('project-subtitle').textContent = showingSettings ? 'Display settings for this project' : (showingInstalls ? 'Installation details and reporting history' : 'Installation telemetry and project health');
+    el('project-overview-content').hidden = showingInstalls || showingSettings;
     el('details-section').hidden = !showingInstalls;
+    el('settings-section').hidden = !showingSettings;
     if (showingInstalls) {
       renderInstallDetails();
       renderFilterSelector();
+    } else if (showingSettings) {
+      renderProjectSettings();
     } else {
       renderStatCards();
       renderProjectHealth();
@@ -1256,11 +1385,12 @@ function dashboardHtml(): string {
       var active = selectedView === 'project' && project === selectedProject ? ' active' : '';
       var expanded = selectedView === 'project' && project === selectedProject;
       return '<div class="project-nav-group"><button class="project-nav-item' + active + '" data-project="' + esc(project) + '">' +
-        '<i class="ti ti-chart-dots-3 project-nav-icon"></i>' + esc(projectLabel(project)) +
+        '<i class="ti ' + esc(projectIcon(project)) + ' project-nav-icon"></i>' + esc(projectLabel(project)) +
         '<i class="ti ti-chevron-' + (expanded ? 'down' : 'right') + ' project-nav-chevron"></i></button>' +
         (expanded ? '<div class="project-subnav">' +
           '<button class="project-subnav-item' + (projectPage === 'overview' ? ' active' : '') + '" data-project="' + esc(project) + '" data-page="overview">Overview</button>' +
           '<button class="project-subnav-item' + (projectPage === 'installs' ? ' active' : '') + '" data-project="' + esc(project) + '" data-page="installs">Installs</button>' +
+          '<button class="project-subnav-item' + (projectPage === 'settings' ? ' active' : '') + '" data-project="' + esc(project) + '" data-page="settings">Settings</button>' +
         '</div>' : '') + '</div>';
     }).join('');
 
@@ -1304,7 +1434,7 @@ function dashboardHtml(): string {
       var active = Number(stats.active_week || 0);
       var total = Number(stats.total || 0);
       return '<button class="overview-card" data-project="' + esc(project) + '">' +
-        '<div class="overview-card-header"><span class="overview-card-title">' + esc(projectLabel(project)) + '</span>' +
+        '<div class="overview-card-header"><span class="overview-card-title"><i class="ti ' + esc(projectIcon(project)) + ' project-nav-icon"></i> ' + esc(projectLabel(project)) + '</span>' +
         '<span class="overview-status' + (active ? '' : ' quiet') + '">' + (active ? 'Seen this week' : 'No recent check-ins') + '</span></div>' +
         '<div class="overview-stats"><div><div class="overview-value">' + active.toLocaleString() + '</div><div class="overview-label">Seen this week</div></div>' +
         '<div><div class="overview-value">' + total.toLocaleString() + '</div><div class="overview-label">All-time installs</div></div></div></button>';
@@ -1320,6 +1450,57 @@ function dashboardHtml(): string {
         loadData(token);
       });
     });
+  }
+
+  function renderProjectSettings() {
+    var settings = projectSettings[selectedProject] || {};
+    var selectedIcon = settings.icon || 'ti-chart-dots-3';
+    el('project-display-name').value = settings.display_name || selectedProject;
+    el('project-icon-picker').innerHTML = projectIconChoices.map(function (icon) {
+      return '<button class="icon-choice' + (icon === selectedIcon ? ' active' : '') + '" type="button" data-icon="' + icon + '" aria-label="Choose icon"><i class="ti ' + icon + '"></i></button>';
+    }).join('');
+
+    el('project-icon-picker').querySelectorAll('.icon-choice').forEach(function (button) {
+      button.addEventListener('click', function () {
+        selectedIcon = button.dataset.icon || 'ti-chart-dots-3';
+        el('project-icon-picker').querySelectorAll('.icon-choice').forEach(function (item) {
+          item.classList.toggle('active', item === button);
+        });
+      });
+    });
+
+    el('project-settings-form').onsubmit = function (event) {
+      event.preventDefault();
+      var saveButton = el('project-settings-save');
+      var status = el('project-settings-status');
+      var displayName = el('project-display-name').value.trim();
+      if (!displayName) {
+        status.textContent = 'Enter a friendly name.';
+        status.classList.add('error');
+        return;
+      }
+      saveButton.disabled = true;
+      status.textContent = 'Saving...';
+      status.classList.remove('error');
+      fetch('/project-settings', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project: selectedProject, display_name: displayName, icon: selectedIcon })
+      }).then(function (response) {
+        if (!response.ok) throw new Error('Unable to save settings');
+        return response.json();
+      }).then(function (saved) {
+        projectSettings[selectedProject] = { display_name: saved.display_name, icon: saved.icon };
+        renderProjectPicker(availableProjects);
+        render();
+        status.textContent = 'Saved.';
+      }).catch(function () {
+        status.textContent = 'Could not save changes. Try again.';
+        status.classList.add('error');
+      }).finally(function () {
+        saveButton.disabled = false;
+      });
+    };
   }
 
   function renderFilterSelector() {
