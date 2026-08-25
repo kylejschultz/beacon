@@ -750,6 +750,9 @@ function dashboardHtml(): string {
     .project-nav-icon { color: #22d3ee; font-size: 1rem; }
     .sidebar-controls { padding: 0 0.25rem; }
     .sidebar-controls .pill-btn { width: 100%; justify-content: center; }
+    .mobile-menu-btn { display: none; align-items: center; justify-content: center; width: 2.3rem; height: 2.3rem; border: 1px solid #293244; border-radius: 6px; background: #111822; color: #67e8f9; cursor: pointer; font-size: 1.15rem; }
+    .mobile-menu-btn:hover { background: rgba(34,211,238,0.08); border-color: rgba(34,211,238,0.45); }
+    .nav-backdrop { display: none; border: 0; padding: 0; cursor: pointer; }
     .content { min-width: 0; }
     .content-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.25rem 2rem; border-bottom: 1px solid #21293a; }
     .page-title { font-size: 1.1rem; font-weight: 650; color: #f1f5f9; }
@@ -946,14 +949,13 @@ function dashboardHtml(): string {
     .behind-badge { display: inline-flex; align-items: center; margin-left: 0.4rem; border: 1px solid rgba(251,191,36,0.32); border-radius: 20px; padding: 0.08rem 0.35rem; color: #fbbf24; background: rgba(251,191,36,0.1); font-size: 0.66rem; font-weight: 650; vertical-align: middle; }
     @media (max-width: 800px) {
       .app-shell { grid-template-columns: 1fr; }
-      .sidebar { border-right: none; border-bottom: 1px solid #21293a; padding: 0.9rem 1rem; gap: 0.9rem; }
-      .sidebar-section-label { display: none; }
-      .sidebar-logo { padding: 0; }
-      .sidebar-controls { padding: 0; }
-      .sidebar-controls .pill-btn { width: auto; }
-      .project-nav { display: flex; overflow-x: auto; }
-      .project-nav-item { width: auto; white-space: nowrap; }
-      .content-header { padding: 1rem 1.25rem; }
+      .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 100; width: min(82vw, 300px); min-height: 100vh; overflow-y: auto; border-right: 1px solid #293244; border-bottom: 0; padding: 1.35rem 1rem; gap: 1.35rem; box-shadow: 14px 0 36px rgba(0,0,0,0.35); transform: translateX(-105%); transition: transform 0.2s ease; }
+      .app-shell.nav-open .sidebar { transform: translateX(0); }
+      .nav-backdrop { position: fixed; inset: 0; z-index: 90; background: rgba(3,7,18,0.68); backdrop-filter: blur(2px); }
+      .app-shell.nav-open .nav-backdrop { display: block; }
+      .mobile-menu-btn { display: inline-flex; flex-shrink: 0; }
+      .content-header { padding: 0.8rem 1rem; }
+      .content-header > div:first-child { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
       main { padding: 1.25rem; }
     }
     @media (max-width: 520px) { .content-header { align-items: flex-start; } .page-subtitle { display: none; } }
@@ -994,12 +996,16 @@ function dashboardHtml(): string {
       <nav class="project-nav" id="project-nav"></nav>
     </div>
   </aside>
+  <button class="nav-backdrop" id="nav-backdrop" type="button" aria-label="Close navigation"></button>
 
   <div class="content">
     <header class="content-header">
       <div>
-        <div class="page-title" id="project-heading">Nestview</div>
-        <div class="page-subtitle" id="project-subtitle">Installation telemetry and project health</div>
+        <button class="mobile-menu-btn" id="mobile-menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false"><i class="ti ti-menu-2"></i></button>
+        <div>
+          <div class="page-title" id="project-heading">Nestview</div>
+          <div class="page-subtitle" id="project-subtitle">Installation telemetry and project health</div>
+        </div>
       </div>
       <div class="header-actions">
         <span class="pill-badge">Live data</span>
@@ -1242,6 +1248,14 @@ function dashboardHtml(): string {
 
   function el(id) { return document.getElementById(id); }
 
+  function setMobileNav(open) {
+    el('dashboard-page').classList.toggle('nav-open', open);
+    el('mobile-menu-toggle').setAttribute('aria-expanded', String(open));
+    el('mobile-menu-toggle').setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+  }
+
+  function closeMobileNav() { setMobileNav(false); }
+
   function esc(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1334,10 +1348,19 @@ function dashboardHtml(): string {
 
   if (token) { showDashboard(); loadData(token); renderDevToggle(); }
 
+  el('mobile-menu-toggle').addEventListener('click', function () {
+    setMobileNav(!el('dashboard-page').classList.contains('nav-open'));
+  });
+  el('nav-backdrop').addEventListener('click', closeMobileNav);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeMobileNav();
+  });
+
   el('dev-toggle').addEventListener('click', function () {
     excludeDev = !excludeDev;
     localStorage.setItem('beacon_exclude_dev', String(excludeDev));
     currentPage = 1;
+    closeMobileNav();
     render();
   });
 
@@ -1477,6 +1500,7 @@ function dashboardHtml(): string {
     el('overview-nav-item').onclick = function () {
       selectedView = 'overview';
       localStorage.setItem('beacon_view', selectedView);
+      closeMobileNav();
       loadData(token);
     };
     el('project-nav').innerHTML = available.map(function (project) {
@@ -1505,6 +1529,7 @@ function dashboardHtml(): string {
         expandedInstallId = null;
         currentPage = 1;
         closeDropdowns();
+        closeMobileNav();
         loadData(token);
       });
     });
@@ -1516,6 +1541,7 @@ function dashboardHtml(): string {
         localStorage.setItem('beacon_project', selectedProject);
         localStorage.setItem('beacon_view', selectedView);
         localStorage.setItem('beacon_project_page', projectPage);
+        closeMobileNav();
         loadData(token);
       });
     });
