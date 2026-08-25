@@ -564,7 +564,7 @@ async function handleProjects(request: Request, env: Env): Promise<Response> {
   }
 
   const result = await env.ANALYTICS_DB.prepare(
-    `SELECT p.project, ps.display_name, ps.icon FROM (
+    `SELECT p.project, ps.display_name, ps.icon, ps.release_version FROM (
        SELECT project FROM installs
        UNION
        SELECT project FROM install_lifetime
@@ -573,7 +573,7 @@ async function handleProjects(request: Request, env: Env): Promise<Response> {
      ) p
      LEFT JOIN project_settings ps ON ps.project = p.project
      ORDER BY p.project ASC`
-  ).all<{ project: string; display_name: string | null; icon: string | null }>();
+  ).all<{ project: string; display_name: string | null; icon: string | null; release_version: string | null }>();
 
   return new Response(JSON.stringify({
     projects: result.results,
@@ -596,7 +596,7 @@ async function handleProjectSettings(request: Request, env: Env): Promise<Respon
     });
   }
 
-  let body: { project?: unknown; display_name?: unknown; icon?: unknown };
+  let body: { project?: unknown; display_name?: unknown; icon?: unknown; release_version?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -609,7 +609,8 @@ async function handleProjectSettings(request: Request, env: Env): Promise<Respon
   const project = typeof body.project === "string" ? body.project.trim() : "";
   const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
   const icon = typeof body.icon === "string" ? body.icon : "";
-  if (!project || project.length > MAX_FIELD_LENGTH || !displayName || displayName.length > 64 || !PROJECT_ICONS.has(icon)) {
+  const releaseVersion = typeof body.release_version === "string" ? body.release_version.trim() : null;
+  if (!project || project.length > MAX_FIELD_LENGTH || !displayName || displayName.length > 64 || !PROJECT_ICONS.has(icon) || (releaseVersion !== null && releaseVersion.length > MAX_FIELD_LENGTH)) {
     return new Response(JSON.stringify({ error: "Invalid project settings" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
@@ -629,15 +630,16 @@ async function handleProjectSettings(request: Request, env: Env): Promise<Respon
   }
 
   await env.ANALYTICS_DB.prepare(
-    `INSERT INTO project_settings (project, display_name, icon, updated_at)
-     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    `INSERT INTO project_settings (project, display_name, icon, release_version, updated_at)
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(project) DO UPDATE SET
        display_name = excluded.display_name,
        icon = excluded.icon,
+       release_version = excluded.release_version,
        updated_at = excluded.updated_at`
-  ).bind(project, displayName, icon).run();
+  ).bind(project, displayName, icon, releaseVersion || null).run();
 
-  return new Response(JSON.stringify({ project, display_name: displayName, icon }), {
+  return new Response(JSON.stringify({ project, display_name: displayName, icon, release_version: releaseVersion || null }), {
     headers: { "Content-Type": "application/json" },
   });
 }
@@ -780,6 +782,7 @@ function dashboardHtml(): string {
     .health-item { min-width: 0; }
     .health-value { color: #f1f5f9; font-size: 1.05rem; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .health-value--good { color: #67e8f9; }
+    .health-value--behind { color: #fbbf24; }
     .health-label { color: #64748b; font-size: 0.75rem; margin-top: 0.28rem; }
     @media (max-width: 700px) { .project-health-grid { grid-template-columns: 1fr 1fr; } }
 
@@ -810,6 +813,7 @@ function dashboardHtml(): string {
     .settings-label { color: #94a3b8; font-size: 0.8rem; font-weight: 600; }
     .settings-input { width: 100%; background: #0d1117; color: #e2e8f0; border: 1px solid #293244; border-radius: 6px; padding: 0.65rem 0.75rem; font: inherit; font-size: 0.9rem; outline: none; }
     .settings-input:focus { border-color: #22d3ee; }
+    .settings-help { color: #64748b; font-size: 0.76rem; line-height: 1.35; }
     .icon-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; }
     .icon-choice { width: 2.45rem; height: 2.25rem; display: inline-flex; align-items: center; justify-content: center; background: #111822; color: #94a3b8; border: 1px solid #293244; border-radius: 6px; cursor: pointer; font-size: 1rem; }
     .icon-choice:hover, .icon-choice.active { color: #67e8f9; border-color: #22d3ee; background: rgba(34,211,238,0.08); }
@@ -898,6 +902,7 @@ function dashboardHtml(): string {
       color: #fbbf24; border-radius: 20px; padding: 0.1rem 0.45rem;
       font-size: 0.7rem; font-weight: 600; margin-left: 0.35rem; vertical-align: middle;
     }
+    .behind-badge { display: inline-flex; align-items: center; margin-left: 0.4rem; border: 1px solid rgba(251,191,36,0.32); border-radius: 20px; padding: 0.08rem 0.35rem; color: #fbbf24; background: rgba(251,191,36,0.1); font-size: 0.66rem; font-weight: 650; vertical-align: middle; }
     @media (max-width: 800px) {
       .app-shell { grid-template-columns: 1fr; }
       .sidebar { border-right: none; border-bottom: 1px solid #21293a; padding: 0.9rem 1rem; gap: 0.9rem; }
@@ -1110,6 +1115,11 @@ function dashboardHtml(): string {
             <span class="settings-label">Friendly name</span>
             <input class="settings-input" id="project-display-name" maxlength="64" required>
           </label>
+          <label class="settings-field">
+            <span class="settings-label">Current release version</span>
+            <input class="settings-input" id="project-release-version" maxlength="255" placeholder="For example: 1.2.0">
+            <span class="settings-help">Seen-this-week installs below this version are marked as behind.</span>
+          </label>
           <div class="settings-field">
             <span class="settings-label">Sidebar icon</span>
             <div class="icon-picker" id="project-icon-picker"></div>
@@ -1236,6 +1246,25 @@ function dashboardHtml(): string {
     return 0;
   }
 
+  function compareVersions(a, b) {
+    function parts(version) {
+      var match = String(version || '').trim().replace(/^v/i, '').match(/^(\\d+(?:\\.\\d+)*)$/);
+      return match ? match[1].split('.').map(Number) : null;
+    }
+    var pa = parts(a), pb = parts(b);
+    if (!pa || !pb) return null;
+    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+      var diff = (pa[i] || 0) - (pb[i] || 0);
+      if (diff) return diff;
+    }
+    return 0;
+  }
+
+  function isBehindRelease(version, releaseVersion) {
+    var comparison = compareVersions(version, releaseVersion);
+    return comparison !== null && comparison < 0;
+  }
+
   function projectLabel(project) {
     var settings = projectSettings[project];
     return (settings && settings.display_name) || project || 'unknown';
@@ -1303,7 +1332,7 @@ function dashboardHtml(): string {
       projectSettings = {};
       projectRows.forEach(function (row) {
         if (typeof row !== 'string' && row.project) {
-          projectSettings[row.project] = { display_name: row.display_name || null, icon: row.icon || null };
+          projectSettings[row.project] = { display_name: row.display_name || null, icon: row.icon || null, release_version: row.release_version || null };
         }
       });
       availableProjects = projects;
@@ -1500,6 +1529,7 @@ function dashboardHtml(): string {
     var settings = projectSettings[selectedProject] || {};
     var selectedIcon = settings.icon || 'ti-chart-dots-3';
     el('project-display-name').value = settings.display_name || selectedProject;
+    el('project-release-version').value = settings.release_version || '';
     el('project-icon-picker').innerHTML = projectIconChoices.map(function (icon) {
       return '<button class="icon-choice' + (icon === selectedIcon ? ' active' : '') + '" type="button" data-icon="' + icon + '" aria-label="Choose icon"><i class="ti ' + icon + '"></i></button>';
     }).join('');
@@ -1518,6 +1548,7 @@ function dashboardHtml(): string {
       var saveButton = el('project-settings-save');
       var status = el('project-settings-status');
       var displayName = el('project-display-name').value.trim();
+      var releaseVersion = el('project-release-version').value.trim();
       if (!displayName) {
         status.textContent = 'Enter a friendly name.';
         status.classList.add('error');
@@ -1529,12 +1560,12 @@ function dashboardHtml(): string {
       fetch('/project-settings', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project: selectedProject, display_name: displayName, icon: selectedIcon })
+        body: JSON.stringify({ project: selectedProject, display_name: displayName, icon: selectedIcon, release_version: releaseVersion })
       }).then(function (response) {
         if (!response.ok) throw new Error('Unable to save settings');
         return response.json();
       }).then(function (saved) {
-        projectSettings[selectedProject] = { display_name: saved.display_name, icon: saved.icon };
+        projectSettings[selectedProject] = { display_name: saved.display_name, icon: saved.icon, release_version: saved.release_version || null };
         renderProjectPicker(availableProjects);
         render();
         status.textContent = 'Saved.';
@@ -1579,15 +1610,18 @@ function dashboardHtml(): string {
     var latest = source.slice().sort(function (a, b) {
       return new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime();
     })[0];
-    var latestVersion = latest && latest.version ? latest.version : '—';
     var latestCheckIn = latest && latest.last_seen ? relTime(latest.last_seen) : 'No check-ins';
     var latestTitle = latest && latest.last_seen ? fmtDate(latest.last_seen) : '';
+    var releaseVersion = (projectSettings[selectedProject] || {}).release_version || '';
+    var behind = releaseVersion ? active.filter(function (install) {
+      return isBehindRelease(install.version, releaseVersion);
+    }).length : null;
 
     el('project-health-note').textContent = source.length ? (excludeDev ? 'Production telemetry' : 'All telemetry') : 'No telemetry yet';
     el('project-health-grid').innerHTML =
       '<div class="health-item"><div class="health-value health-value--good" title="' + esc(latestTitle) + '">' + esc(latestCheckIn) + '</div><div class="health-label">Latest check-in</div></div>' +
-      '<div class="health-item"><div class="health-value" title="Latest reporting install">' + esc(latestVersion) + '</div><div class="health-label">Latest version</div></div>' +
-      '<div class="health-item"><div class="health-value">' + active.length.toLocaleString() + ' / ' + source.length.toLocaleString() + '</div><div class="health-label">Seen this week / reporting installs</div></div>';
+      '<div class="health-item"><div class="health-value" title="Current release version">' + esc(releaseVersion || 'Not set') + '</div><div class="health-label">Current release</div></div>' +
+      '<div class="health-item"><div class="health-value' + (behind ? ' health-value--behind' : '') + '">' + (behind === null ? '—' : behind.toLocaleString()) + '</div><div class="health-label">Behind this week' + (behind === null ? ' (set release)' : '') + '</div></div>';
   }
 
   function renderChart() {
@@ -1949,12 +1983,14 @@ function dashboardHtml(): string {
       var lastSeenRel = i.last_seen ? relTime(i.last_seen) : '-';
 
       var devBadge = (!excludeDev && i.is_dev) ? '<span class="dev-badge">dev</span>' : '';
+      var releaseVersion = (projectSettings[selectedProject] || {}).release_version || '';
+      var behindBadge = releaseVersion && isActiveAt(i, Date.now()) && isBehindRelease(i.version, releaseVersion) ? '<span class="behind-badge">behind</span>' : '';
       var dataRow = '<tr class="install-data-row' + (isExpanded ? ' row-expanded' : '') + '" data-id="' + esc(i.install_id || '') + '">' +
         '<td class="col-chevron">' + (isExpanded ? '▼' : '▶') + '</td>' +
         '<td class="col-installid install-id-cell">' + esc(i.install_id || 'unknown') + devBadge + '</td>' +
         '<td class="col-os">' + esc(osLabel) + '</td>' +
         '<td class="col-arch">' + esc(i.arch || '-') + '</td>' +
-        '<td class="col-version">' + esc(i.version || '-') + '</td>' +
+        '<td class="col-version">' + esc(i.version || '-') + behindBadge + '</td>' +
         '<td class="col-firstseen">' + esc(firstSeenRel) + '</td>' +
         '<td class="col-lastseen">' + esc(lastSeenRel) + '</td>' +
         '</tr>';
