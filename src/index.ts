@@ -859,13 +859,14 @@ function dashboardHtml(): string {
     .install-table tbody tr.install-detail-row { display: block; }
     .install-table tbody tr.install-detail-row > td { display: block; padding: 0; cursor: default; }
     .install-id-cell { font-family: monospace; font-size: 0.85rem; color: #22d3ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .install-detail-panel { background: #1c2230; border-top: 1px solid #21293a; padding: 0.85rem 1rem; }
-    .detail-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem 1rem; }
-    @media (max-width: 640px) { .detail-grid { grid-template-columns: 1fr 1fr; } }
-    .detail-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
-    .detail-key { font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
-    .detail-val { font-size: 0.82rem; color: #e2e8f0; word-break: break-all; overflow-wrap: anywhere; }
-    .detail-mono { font-family: monospace; font-size: 0.76rem; }
+    .install-detail-panel { background: #161d28; border-top: 1px solid #293244; padding: 0.9rem; }
+    .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+    .detail-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; padding: 0.65rem 0.7rem; background: #111822; border: 1px solid #263244; border-radius: 6px; }
+    .detail-field--wide { grid-column: 1 / -1; }
+    .detail-key { font-size: 0.67rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; }
+    .detail-val { font-size: 0.84rem; color: #e2e8f0; overflow-wrap: anywhere; }
+    .detail-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: #67e8f9; }
+    @media (max-width: 540px) { .detail-grid { grid-template-columns: 1fr; } .detail-field--wide { grid-column: auto; } }
     @media (max-width: 640px) {
       .install-list-header, .install-table tbody tr.install-data-row { grid-template-columns: 16px minmax(0, 1fr) 4.25rem 4.75rem; gap: 0.5rem; padding-left: 0.7rem; padding-right: 0.7rem; }
     }
@@ -1920,14 +1921,14 @@ function dashboardHtml(): string {
             '</span></div>';
         }).join('') : '';
         detailRow = '<tr class="install-detail-row"><td colspan="7"><div class="install-detail-panel"><div class="detail-grid">' +
-          '<div class="detail-field"><span class="detail-key">install_id</span><span class="detail-val detail-mono">' + esc(i.install_id || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">arch</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">os</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
+          '<div class="detail-field detail-field--wide"><span class="detail-key">Install ID</span><span class="detail-val detail-mono">' + esc(i.install_id || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Architecture</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Operating system</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
           projectDetailFields +
-          '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">first_seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Project</span><span class="detail-val">' + esc(projectLabel(i.project || '')) + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">First seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Last seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
           '</div></div></td></tr>';
       }
 
