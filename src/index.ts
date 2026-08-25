@@ -712,7 +712,8 @@ function dashboardHtml(): string {
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0d1117; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; overflow-x: hidden; }
+    html, body { width: 100%; max-width: 100%; overflow-x: clip; }
+    body { background: #0d1117; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; overscroll-behavior-x: none; }
 
     /* ---- Login ---- */
     #login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -948,14 +949,17 @@ function dashboardHtml(): string {
     }
     .behind-badge { display: inline-flex; align-items: center; margin-left: 0.4rem; border: 1px solid rgba(251,191,36,0.32); border-radius: 20px; padding: 0.08rem 0.35rem; color: #fbbf24; background: rgba(251,191,36,0.1); font-size: 0.66rem; font-weight: 650; vertical-align: middle; }
     @media (max-width: 800px) {
-      .app-shell { grid-template-columns: 1fr; }
+      .app-shell, .content, .content-header, main { width: 100%; max-width: 100%; min-width: 0; }
+      .app-shell { grid-template-columns: minmax(0, 1fr); }
       .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 100; width: min(82vw, 300px); min-height: 100vh; overflow-y: auto; border-right: 1px solid #293244; border-bottom: 0; padding: 1.35rem 1rem; gap: 1.35rem; box-shadow: 14px 0 36px rgba(0,0,0,0.35); transform: translateX(-105%); transition: transform 0.2s ease; }
       .app-shell.nav-open .sidebar { transform: translateX(0); }
       .nav-backdrop { position: fixed; inset: 0; z-index: 90; background: rgba(3,7,18,0.68); backdrop-filter: blur(2px); }
       .app-shell.nav-open .nav-backdrop { display: block; }
       .mobile-menu-btn { display: inline-flex; flex-shrink: 0; }
       .content-header { padding: 0.8rem 1rem; }
-      .content-header > div:first-child { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+      .content-header > div:first-child { display: flex; align-items: center; gap: 0.75rem; min-width: 0; overflow: hidden; }
+      .page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .header-actions { flex-shrink: 0; }
       main { padding: 1.25rem; }
     }
     @media (max-width: 520px) { .content-header { align-items: flex-start; } .page-subtitle { display: none; } }
