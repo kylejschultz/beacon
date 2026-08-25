@@ -745,14 +745,16 @@ function dashboardHtml(): string {
     .data-health-title { color: #f1f5f9; font-size: 0.95rem; font-weight: 650; }
     .data-health-note { color: #64748b; font-size: 0.78rem; }
     .data-health-list { display: grid; }
-    .data-health-row { display: grid; grid-template-columns: minmax(9rem, 1.4fr) 1fr 0.8fr 0.8fr; gap: 1rem; align-items: center; padding: 0.9rem 1.2rem; border-bottom: 1px solid #21293a; }
+    .data-health-columns, .data-health-row { display: grid; grid-template-columns: minmax(9rem, 1.4fr) 1fr 1fr; gap: 1rem; align-items: center; }
+    .data-health-columns { padding: 0.6rem 1.2rem; color: #64748b; font-size: 0.68rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid #21293a; }
+    .data-health-row { padding: 0.9rem 1.2rem; border-bottom: 1px solid #21293a; }
     .data-health-row:last-child { border-bottom: 0; }
     .data-health-project { display: inline-flex; align-items: center; gap: 0.5rem; color: #e2e8f0; font-size: 0.88rem; font-weight: 600; min-width: 0; }
     .data-health-value { color: #cbd5e1; font-size: 0.84rem; }
     .data-health-value.quiet { color: #fbbf24; }
     .data-health-value.good { color: #67e8f9; }
     .data-health-label { display: none; color: #64748b; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.18rem; }
-    @media (max-width: 700px) { .data-health-row { grid-template-columns: 1fr 1fr; gap: 0.75rem; } .data-health-project { grid-column: 1 / -1; } .data-health-label { display: block; } }
+    @media (max-width: 700px) { .data-health-columns { display: none; } .data-health-row { grid-template-columns: 1fr 1fr; gap: 0.75rem; } .data-health-project { grid-column: 1 / -1; } .data-health-label { display: block; } }
 
     /* ---- Stat cards ---- */
     .stat-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
@@ -964,7 +966,7 @@ function dashboardHtml(): string {
       <section class="data-health" id="data-health">
         <div class="data-health-header">
           <span class="data-health-title">Data health</span>
-          <span class="data-health-note">Current reporting quality</span>
+          <span class="data-health-note">New and quiet install activity</span>
         </div>
         <div class="data-health-list" id="data-health-list"></div>
       </section>
@@ -1476,26 +1478,20 @@ function dashboardHtml(): string {
 
   function renderDataHealth(projects) {
     var now = Date.now();
-    el('data-health-list').innerHTML = projects.length ? projects.map(function (project) {
+    var columns = '<div class="data-health-columns"><span>Project</span><span>New this week</span><span>Quiet 7–30d</span></div>';
+    el('data-health-list').innerHTML = projects.length ? columns + projects.map(function (project) {
       var installs = (projectSummaries[project].installs || []).filter(function (install) {
         return !excludeDev || !install.is_dev;
       });
-      var latest = installs.reduce(function (latestSeen, install) {
-        var seen = new Date(install.last_seen).getTime();
-        return isNaN(seen) ? latestSeen : Math.max(latestSeen, seen);
-      }, 0);
+      var newThisWeek = installs.filter(function (install) { return isNewToday(install.first_seen); }).length;
       var quiet = installs.filter(function (install) {
         var seen = new Date(install.last_seen).getTime();
         return !isNaN(seen) && now - seen > RECENT_MS;
       }).length;
-      var missing = installs.filter(function (install) {
-        return !install.os || !install.arch;
-      }).length;
       return '<div class="data-health-row">' +
         '<div class="data-health-project"><i class="ti ' + esc(projectIcon(project)) + ' project-nav-icon"></i>' + esc(projectLabel(project)) + '</div>' +
-        '<div><div class="data-health-label">Latest check-in</div><div class="data-health-value' + (latest && now - latest <= RECENT_MS ? ' good' : ' quiet') + '">' + (latest ? esc(relTime(new Date(latest).toISOString())) : 'No check-ins') + '</div></div>' +
-        '<div><div class="data-health-label">Quiet installs</div><div class="data-health-value' + (quiet ? ' quiet' : ' good') + '">' + quiet + '</div></div>' +
-        '<div><div class="data-health-label">Missing OS / arch</div><div class="data-health-value' + (missing ? ' quiet' : ' good') + '">' + missing + '</div></div>' +
+        '<div><div class="data-health-label">New this week</div><div class="data-health-value' + (newThisWeek ? ' good' : '') + '">' + newThisWeek + '</div></div>' +
+        '<div><div class="data-health-label">Quiet 7–30d</div><div class="data-health-value' + (quiet ? ' quiet' : ' good') + '">' + quiet + '</div></div>' +
       '</div>';
     }).join('') : '<div class="data-health-row"><span class="empty-text">No projects have reported telemetry yet.</span></div>';
   }
