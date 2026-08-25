@@ -1588,7 +1588,7 @@ function dashboardHtml(): string {
       var release = (projectSettings[project] || {}).release_version || '';
       var activeInstalls = installs.filter(function (install) { return isActiveAt(install, Date.now()); });
       var behind = release ? activeInstalls.filter(function (install) { return isBehindRelease(install.version, release); }).length : 0;
-      var status = behind ? 'Needs attention' : (active ? 'Healthy' : 'Quiet');
+      var status = behind ? 'Older versions' : (active ? 'Current' : 'Quiet');
       var statusClass = behind ? ' attention' : (active ? '' : ' quiet');
       var rollout = release ? (active ? (behind ? behind + ' of ' + activeInstalls.length + ' active behind' : 'All active on release') : 'No active installs') : 'Set a release version';
       return '<button class="overview-card" data-project="' + esc(project) + '">' +
