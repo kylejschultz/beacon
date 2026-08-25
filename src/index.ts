@@ -1901,7 +1901,6 @@ function dashboardHtml(): string {
 
     tbody.innerHTML = pageRows.map(function (i) {
       var osLabel = (i.os != null && i.os !== '') ? i.os : '-';
-      var chanLabel = (i.channel != null && i.channel !== '') ? i.channel : '-';
       var isExpanded = expandedInstallId === i.install_id;
       var firstSeenRel = i.first_seen ? relTime(i.first_seen) : '-';
       var lastSeenRel = i.last_seen ? relTime(i.last_seen) : '-';
@@ -1931,7 +1930,6 @@ function dashboardHtml(): string {
           '<div class="detail-field"><span class="detail-key">version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">arch</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">os</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">channel</span><span class="detail-val">' + esc(chanLabel) + '</span></div>' +
           projectDetailFields +
           '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">first_seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
