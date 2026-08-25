@@ -176,6 +176,18 @@ export default {
       await env.ANALYTICS_DB.prepare(
         `DELETE FROM installs WHERE last_seen < datetime('now', '-30 days')`
       ).run();
+
+      const projects = await env.ANALYTICS_DB.prepare(
+        `SELECT project, github_repo FROM project_settings WHERE github_repo IS NOT NULL`
+      ).all<{ project: string; github_repo: string }>();
+      for (const project of projects.results) {
+        const releaseVersion = await fetchLatestGitHubRelease(project.github_repo);
+        if (releaseVersion) {
+          await env.ANALYTICS_DB.prepare(
+            `UPDATE project_settings SET release_version = ?, updated_at = CURRENT_TIMESTAMP WHERE project = ?`
+          ).bind(releaseVersion, project.project).run();
+        }
+      }
     } catch {
       // cron failure must not affect /ping
     }
@@ -570,7 +582,7 @@ async function handleProjects(request: Request, env: Env): Promise<Response> {
   }
 
   const result = await env.ANALYTICS_DB.prepare(
-    `SELECT p.project, ps.display_name, ps.icon, ps.release_version FROM (
+    `SELECT p.project, ps.display_name, ps.icon, ps.release_version, ps.github_repo FROM (
        SELECT project FROM installs
        UNION
        SELECT project FROM install_lifetime
@@ -579,7 +591,7 @@ async function handleProjects(request: Request, env: Env): Promise<Response> {
      ) p
      LEFT JOIN project_settings ps ON ps.project = p.project
      ORDER BY p.project ASC`
-  ).all<{ project: string; display_name: string | null; icon: string | null; release_version: string | null }>();
+  ).all<{ project: string; display_name: string | null; icon: string | null; release_version: string | null; github_repo: string | null }>();
 
   return new Response(JSON.stringify({
     projects: result.results,
@@ -593,6 +605,25 @@ const PROJECT_ICONS = new Set([
   "ti-chart-dots-3", "ti-box", "ti-device-desktop", "ti-music", "ti-server",
   "ti-radio", "ti-code", "ti-app-window",
 ]);
+const GITHUB_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+async function fetchLatestGitHubRelease(githubRepo: string): Promise<string | null> {
+  try {
+    const response = await fetch(`https://api.github.com/repos/${githubRepo}/releases/latest`, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "Beacon-release-checker",
+      },
+    });
+    if (!response.ok) return null;
+    const release = await response.json<{ tag_name?: unknown }>();
+    return typeof release.tag_name === "string" && release.tag_name.length <= MAX_FIELD_LENGTH
+      ? release.tag_name
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 async function handleProjectSettings(request: Request, env: Env): Promise<Response> {
   if (!await verifyBearerJWT(request, env)) {
@@ -602,7 +633,7 @@ async function handleProjectSettings(request: Request, env: Env): Promise<Respon
     });
   }
 
-  let body: { project?: unknown; display_name?: unknown; icon?: unknown; release_version?: unknown };
+  let body: { project?: unknown; display_name?: unknown; icon?: unknown; release_version?: unknown; github_repo?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -616,7 +647,8 @@ async function handleProjectSettings(request: Request, env: Env): Promise<Respon
   const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
   const icon = typeof body.icon === "string" ? body.icon : "";
   const releaseVersion = typeof body.release_version === "string" ? body.release_version.trim() : null;
-  if (!project || project.length > MAX_FIELD_LENGTH || !displayName || displayName.length > 64 || !PROJECT_ICONS.has(icon) || (releaseVersion !== null && releaseVersion.length > MAX_FIELD_LENGTH)) {
+  const githubRepo = typeof body.github_repo === "string" ? body.github_repo.trim() : null;
+  if (!project || project.length > MAX_FIELD_LENGTH || !displayName || displayName.length > 64 || !PROJECT_ICONS.has(icon) || (releaseVersion !== null && releaseVersion.length > MAX_FIELD_LENGTH) || (githubRepo !== null && githubRepo !== "" && !GITHUB_REPO_PATTERN.test(githubRepo))) {
     return new Response(JSON.stringify({ error: "Invalid project settings" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
@@ -635,17 +667,20 @@ async function handleProjectSettings(request: Request, env: Env): Promise<Respon
     });
   }
 
+  const githubReleaseVersion = githubRepo ? await fetchLatestGitHubRelease(githubRepo) : null;
+  const resolvedReleaseVersion = githubReleaseVersion || releaseVersion || null;
   await env.ANALYTICS_DB.prepare(
-    `INSERT INTO project_settings (project, display_name, icon, release_version, updated_at)
-     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `INSERT INTO project_settings (project, display_name, icon, release_version, github_repo, updated_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(project) DO UPDATE SET
        display_name = excluded.display_name,
        icon = excluded.icon,
        release_version = excluded.release_version,
+       github_repo = excluded.github_repo,
        updated_at = excluded.updated_at`
-  ).bind(project, displayName, icon, releaseVersion || null).run();
+  ).bind(project, displayName, icon, resolvedReleaseVersion, githubRepo || null).run();
 
-  return new Response(JSON.stringify({ project, display_name: displayName, icon, release_version: releaseVersion || null }), {
+  return new Response(JSON.stringify({ project, display_name: displayName, icon, release_version: resolvedReleaseVersion, github_repo: githubRepo || null, github_release_found: Boolean(githubReleaseVersion) }), {
     headers: { "Content-Type": "application/json" },
   });
 }
@@ -1124,7 +1159,12 @@ function dashboardHtml(): string {
           <label class="settings-field">
             <span class="settings-label">Current release version</span>
             <input class="settings-input" id="project-release-version" maxlength="255" placeholder="For example: 1.2.0">
-            <span class="settings-help">Seen-this-week installs below this version are marked as behind.</span>
+            <span class="settings-help">Used as a fallback if no GitHub release is configured.</span>
+          </label>
+          <label class="settings-field">
+            <span class="settings-label">GitHub repository</span>
+            <input class="settings-input" id="project-github-repo" maxlength="255" placeholder="owner/repository">
+            <span class="settings-help">Beacon checks the latest published release now and refreshes it daily.</span>
           </label>
           <div class="settings-field">
             <span class="settings-label">Sidebar icon</span>
@@ -1338,7 +1378,7 @@ function dashboardHtml(): string {
       projectSettings = {};
       projectRows.forEach(function (row) {
         if (typeof row !== 'string' && row.project) {
-          projectSettings[row.project] = { display_name: row.display_name || null, icon: row.icon || null, release_version: row.release_version || null };
+          projectSettings[row.project] = { display_name: row.display_name || null, icon: row.icon || null, release_version: row.release_version || null, github_repo: row.github_repo || null };
         }
       });
       availableProjects = projects;
@@ -1536,6 +1576,7 @@ function dashboardHtml(): string {
     var selectedIcon = settings.icon || 'ti-chart-dots-3';
     el('project-display-name').value = settings.display_name || selectedProject;
     el('project-release-version').value = settings.release_version || '';
+    el('project-github-repo').value = settings.github_repo || '';
     el('project-icon-picker').innerHTML = projectIconChoices.map(function (icon) {
       return '<button class="icon-choice' + (icon === selectedIcon ? ' active' : '') + '" type="button" data-icon="' + icon + '" aria-label="Choose icon"><i class="ti ' + icon + '"></i></button>';
     }).join('');
@@ -1555,6 +1596,7 @@ function dashboardHtml(): string {
       var status = el('project-settings-status');
       var displayName = el('project-display-name').value.trim();
       var releaseVersion = el('project-release-version').value.trim();
+      var githubRepo = el('project-github-repo').value.trim();
       if (!displayName) {
         status.textContent = 'Enter a friendly name.';
         status.classList.add('error');
@@ -1566,15 +1608,15 @@ function dashboardHtml(): string {
       fetch('/project-settings', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project: selectedProject, display_name: displayName, icon: selectedIcon, release_version: releaseVersion })
+        body: JSON.stringify({ project: selectedProject, display_name: displayName, icon: selectedIcon, release_version: releaseVersion, github_repo: githubRepo })
       }).then(function (response) {
         if (!response.ok) throw new Error('Unable to save settings');
         return response.json();
       }).then(function (saved) {
-        projectSettings[selectedProject] = { display_name: saved.display_name, icon: saved.icon, release_version: saved.release_version || null };
+        projectSettings[selectedProject] = { display_name: saved.display_name, icon: saved.icon, release_version: saved.release_version || null, github_repo: saved.github_repo || null };
         renderProjectPicker(availableProjects);
         render();
-        status.textContent = 'Saved.';
+        status.textContent = saved.github_repo ? (saved.github_release_found ? 'Saved and release checked.' : 'Saved. No published GitHub release found.') : 'Saved.';
       }).catch(function () {
         status.textContent = 'Could not save changes. Try again.';
         status.classList.add('error');
