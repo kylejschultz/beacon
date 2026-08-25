@@ -994,10 +994,6 @@ function dashboardHtml(): string {
           <div class="breakdown-title">OS</div>
           <div id="breakdown-os"></div>
         </div>
-        <div class="breakdown-card">
-          <div class="breakdown-title">Channel</div>
-          <div id="breakdown-channel"></div>
-        </div>
         <div class="breakdown-card" id="breakdown-project-stats-card" hidden>
           <div class="breakdown-title">Library Size</div>
           <div id="breakdown-project-stats"></div>
@@ -1132,6 +1128,11 @@ function dashboardHtml(): string {
   var RECENT_MS = 7 * 24 * 3600000;
   var MIN_COL_WIDTH = 48;
   var projectProfiles = {
+    nestview: {
+      detailFields: [
+        ['container_count', 'Containers']
+      ]
+    },
     prism: {
       breakdownTitle: 'Library Size',
       breakdownFields: [
@@ -1669,7 +1670,6 @@ function dashboardHtml(): string {
     renderDist('breakdown-version', buildDist('version'), total, true);
     renderDist('breakdown-arch', buildDist('arch'), total, false);
     renderDist('breakdown-os', buildDist('os'), total, false);
-    renderDist('breakdown-channel', buildDist('channel'), total, false);
     renderProjectStats(active);
   }
 
@@ -1677,8 +1677,8 @@ function dashboardHtml(): string {
     var profile = projectProfile();
     var card = el('breakdown-project-stats-card');
     var container = el('breakdown-project-stats');
-    card.hidden = !profile;
-    if (!profile) {
+    card.hidden = !profile || !profile.breakdownFields;
+    if (!profile || !profile.breakdownFields) {
       container.innerHTML = '';
       return;
     }
