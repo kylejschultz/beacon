@@ -740,6 +740,19 @@ function dashboardHtml(): string {
     .overview-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     .overview-value { color: #f1f5f9; font-size: 1.75rem; font-weight: 700; line-height: 1; margin-bottom: 0.35rem; }
     .overview-label { color: #64748b; font-size: 0.77rem; }
+    .data-health { margin-top: 1.5rem; background: #161b22; border: 1px solid #21293a; border-radius: 10px; overflow: hidden; }
+    .data-health-header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: 1rem 1.2rem; border-bottom: 1px solid #21293a; }
+    .data-health-title { color: #f1f5f9; font-size: 0.95rem; font-weight: 650; }
+    .data-health-note { color: #64748b; font-size: 0.78rem; }
+    .data-health-list { display: grid; }
+    .data-health-row { display: grid; grid-template-columns: minmax(9rem, 1.4fr) 1fr 0.8fr 0.8fr; gap: 1rem; align-items: center; padding: 0.9rem 1.2rem; border-bottom: 1px solid #21293a; }
+    .data-health-row:last-child { border-bottom: 0; }
+    .data-health-project { display: inline-flex; align-items: center; gap: 0.5rem; color: #e2e8f0; font-size: 0.88rem; font-weight: 600; min-width: 0; }
+    .data-health-value { color: #cbd5e1; font-size: 0.84rem; }
+    .data-health-value.quiet { color: #fbbf24; }
+    .data-health-value.good { color: #67e8f9; }
+    .data-health-label { display: none; color: #64748b; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.18rem; }
+    @media (max-width: 700px) { .data-health-row { grid-template-columns: 1fr 1fr; gap: 0.75rem; } .data-health-project { grid-column: 1 / -1; } .data-health-label { display: block; } }
 
     /* ---- Stat cards ---- */
     .stat-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
@@ -948,6 +961,13 @@ function dashboardHtml(): string {
     <section id="overview-page" hidden>
       <p class="overview-intro">A live readout of every project reporting to Beacon.</p>
       <div class="overview-grid" id="overview-grid"></div>
+      <section class="data-health" id="data-health">
+        <div class="data-health-header">
+          <span class="data-health-title">Data health</span>
+          <span class="data-health-note">Current reporting quality</span>
+        </div>
+        <div class="data-health-list" id="data-health-list"></div>
+      </section>
     </section>
     <div id="project-dashboard">
     <div id="project-overview-content">
@@ -1295,13 +1315,14 @@ function dashboardHtml(): string {
           var projectParam = encodeURIComponent(project);
           return Promise.all([
             fetch('/summary?project=' + projectParam, { headers: authHeaders }),
-            fetch('/summary?project=' + projectParam + '&exclude_dev=true', { headers: authHeaders })
+            fetch('/summary?project=' + projectParam + '&exclude_dev=true', { headers: authHeaders }),
+            fetch('/installs?project=' + projectParam, { headers: authHeaders })
           ]);
         })).then(function (responseGroups) {
           var responses = responseGroups.flat();
           if (responses.some(function (response) { return !response.ok; })) return null;
           return Promise.all(responseGroups.map(function (group) {
-            return Promise.all([group[0].json(), group[1].json()]);
+            return Promise.all([group[0].json(), group[1].json(), group[2].json()]);
           })).then(function (summaries) { return { overview: true, projects: projects, summaries: summaries }; });
         });
       }
@@ -1324,7 +1345,11 @@ function dashboardHtml(): string {
       if (data.overview) {
         projectSummaries = {};
         data.projects.forEach(function (project, index) {
-          projectSummaries[project] = { all: data.summaries[index][0] || {}, excludeDev: data.summaries[index][1] || {} };
+          projectSummaries[project] = {
+            all: data.summaries[index][0] || {},
+            excludeDev: data.summaries[index][1] || {},
+            installs: (data.summaries[index][2] || {}).installs || []
+          };
         });
       } else {
         allInstalls = data.results[0].installs || [];
@@ -1446,6 +1471,33 @@ function dashboardHtml(): string {
         loadData(token);
       });
     });
+    renderDataHealth(projects);
+  }
+
+  function renderDataHealth(projects) {
+    var now = Date.now();
+    el('data-health-list').innerHTML = projects.length ? projects.map(function (project) {
+      var installs = (projectSummaries[project].installs || []).filter(function (install) {
+        return !excludeDev || !install.is_dev;
+      });
+      var latest = installs.reduce(function (latestSeen, install) {
+        var seen = new Date(install.last_seen).getTime();
+        return isNaN(seen) ? latestSeen : Math.max(latestSeen, seen);
+      }, 0);
+      var quiet = installs.filter(function (install) {
+        var seen = new Date(install.last_seen).getTime();
+        return !isNaN(seen) && now - seen > RECENT_MS;
+      }).length;
+      var missing = installs.filter(function (install) {
+        return !install.os || !install.arch;
+      }).length;
+      return '<div class="data-health-row">' +
+        '<div class="data-health-project"><i class="ti ' + esc(projectIcon(project)) + ' project-nav-icon"></i>' + esc(projectLabel(project)) + '</div>' +
+        '<div><div class="data-health-label">Latest check-in</div><div class="data-health-value' + (latest && now - latest <= RECENT_MS ? ' good' : ' quiet') + '">' + (latest ? esc(relTime(new Date(latest).toISOString())) : 'No check-ins') + '</div></div>' +
+        '<div><div class="data-health-label">Quiet installs</div><div class="data-health-value' + (quiet ? ' quiet' : ' good') + '">' + quiet + '</div></div>' +
+        '<div><div class="data-health-label">Missing OS / arch</div><div class="data-health-value' + (missing ? ' quiet' : ' good') + '">' + missing + '</div></div>' +
+      '</div>';
+    }).join('') : '<div class="data-health-row"><span class="empty-text">No projects have reported telemetry yet.</span></div>';
   }
 
   function renderProjectSettings() {
