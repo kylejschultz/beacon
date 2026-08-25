@@ -784,9 +784,12 @@ function dashboardHtml(): string {
     .overview-card-title { color: #f1f5f9; font-size: 1rem; font-weight: 650; }
     .overview-status { color: #67e8f9; background: rgba(34,211,238,0.1); border-radius: 20px; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 600; white-space: nowrap; }
     .overview-status.quiet { color: #94a3b8; background: rgba(148,163,184,0.1); }
+    .overview-status.attention { color: #fbbf24; background: rgba(251,191,36,0.1); }
     .overview-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     .overview-value { color: #f1f5f9; font-size: 1.75rem; font-weight: 700; line-height: 1; margin-bottom: 0.35rem; }
     .overview-label { color: #64748b; font-size: 0.77rem; }
+    .overview-release { margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid #21293a; color: #94a3b8; font-size: 0.78rem; display: flex; justify-content: space-between; gap: 0.75rem; }
+    .overview-release strong { color: #e2e8f0; font-weight: 600; }
     .data-health { margin-top: 1.5rem; background: #161b22; border: 1px solid #21293a; border-radius: 10px; overflow: hidden; }
     .data-health-header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: 1rem 1.2rem; border-bottom: 1px solid #21293a; }
     .data-health-title { color: #f1f5f9; font-size: 0.95rem; font-weight: 650; }
@@ -948,6 +951,9 @@ function dashboardHtml(): string {
       font-size: 0.7rem; font-weight: 600; margin-left: 0.35rem; vertical-align: middle;
     }
     .behind-badge { display: inline-flex; align-items: center; margin-left: 0.4rem; border: 1px solid rgba(251,191,36,0.32); border-radius: 20px; padding: 0.08rem 0.35rem; color: #fbbf24; background: rgba(251,191,36,0.1); font-size: 0.66rem; font-weight: 650; vertical-align: middle; }
+    .activity-badge { display: inline-flex; align-items: center; margin-left: 0.4rem; border-radius: 20px; padding: 0.08rem 0.35rem; font-size: 0.66rem; font-weight: 650; vertical-align: middle; }
+    .activity-badge.new { color: #67e8f9; background: rgba(34,211,238,0.1); border: 1px solid rgba(34,211,238,0.28); }
+    .activity-badge.quiet { color: #fbbf24; background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); }
     @media (max-width: 800px) {
       .app-shell, .content, .content-header, main { width: 100%; max-width: 100%; min-width: 0; }
       .app-shell { grid-template-columns: minmax(0, 1fr); }
@@ -1329,6 +1335,13 @@ function dashboardHtml(): string {
     return comparison !== null && comparison < 0;
   }
 
+  function installActivity(install) {
+    if (isNewToday(install.first_seen)) return 'new';
+    var lastSeen = new Date(install.last_seen).getTime();
+    if (!isNaN(lastSeen) && Date.now() - lastSeen > RECENT_MS) return 'quiet';
+    return '';
+  }
+
   function projectLabel(project) {
     var settings = projectSettings[project];
     return (settings && settings.display_name) || project || 'unknown';
@@ -1556,16 +1569,34 @@ function dashboardHtml(): string {
     el('project-dashboard').hidden = true;
     el('project-heading').textContent = 'All projects';
     el('project-subtitle').textContent = 'Installation telemetry across your apps';
-    var projects = Object.keys(projectSummaries).sort();
+    var projects = Object.keys(projectSummaries).sort(function (a, b) {
+      function rank(project) {
+        var installs = (projectSummaries[project].installs || []).filter(function (install) { return !excludeDev || !install.is_dev; });
+        var release = (projectSettings[project] || {}).release_version || '';
+        var active = installs.filter(function (install) { return isActiveAt(install, Date.now()); });
+        if (release && active.some(function (install) { return isBehindRelease(install.version, release); })) return 0;
+        if (!active.length) return 1;
+        return 2;
+      }
+      return rank(a) - rank(b) || projectLabel(a).localeCompare(projectLabel(b));
+    });
     el('overview-grid').innerHTML = projects.length ? projects.map(function (project) {
       var stats = projectSummaries[project][excludeDev ? 'excludeDev' : 'all'] || {};
       var active = Number(stats.active_week || 0);
       var total = Number(stats.total || 0);
+      var installs = (projectSummaries[project].installs || []).filter(function (install) { return !excludeDev || !install.is_dev; });
+      var release = (projectSettings[project] || {}).release_version || '';
+      var activeInstalls = installs.filter(function (install) { return isActiveAt(install, Date.now()); });
+      var behind = release ? activeInstalls.filter(function (install) { return isBehindRelease(install.version, release); }).length : 0;
+      var status = behind ? 'Needs attention' : (active ? 'Healthy' : 'Quiet');
+      var statusClass = behind ? ' attention' : (active ? '' : ' quiet');
+      var rollout = release ? (active ? (behind ? behind + ' of ' + activeInstalls.length + ' active behind' : 'All active on release') : 'No active installs') : 'Set a release version';
       return '<button class="overview-card" data-project="' + esc(project) + '">' +
         '<div class="overview-card-header"><span class="overview-card-title"><i class="ti ' + esc(projectIcon(project)) + ' project-nav-icon"></i> ' + esc(projectLabel(project)) + '</span>' +
-        '<span class="overview-status' + (active ? '' : ' quiet') + '">' + (active ? 'Seen this week' : 'No recent check-ins') + '</span></div>' +
+        '<span class="overview-status' + statusClass + '">' + status + '</span></div>' +
         '<div class="overview-stats"><div><div class="overview-value">' + active.toLocaleString() + '</div><div class="overview-label">Seen this week</div></div>' +
-        '<div><div class="overview-value">' + total.toLocaleString() + '</div><div class="overview-label">All-time installs</div></div></div></button>';
+        '<div><div class="overview-value">' + total.toLocaleString() + '</div><div class="overview-label">All-time installs</div></div></div>' +
+        '<div class="overview-release"><span>Release <strong>' + esc(release || 'Not set') + '</strong></span><span>' + esc(rollout) + '</span></div></button>';
     }).join('') : '<span class="empty-text">No projects have reported telemetry yet.</span>';
     el('overview-grid').querySelectorAll('.overview-card').forEach(function (card) {
       card.addEventListener('click', function () {
@@ -1699,7 +1730,7 @@ function dashboardHtml(): string {
     el('project-health-grid').innerHTML =
       '<div class="health-item"><div class="health-value health-value--good" title="' + esc(latestTitle) + '">' + esc(latestCheckIn) + '</div><div class="health-label">Latest check-in</div></div>' +
       '<div class="health-item"><div class="health-value" title="Current release version">' + esc(releaseVersion || 'Not set') + '</div><div class="health-label">Current release</div></div>' +
-      '<div class="health-item"><div class="health-value' + (behind ? ' health-value--behind' : '') + '">' + (behind === null ? '—' : behind.toLocaleString()) + '</div><div class="health-label">Behind this week' + (behind === null ? ' (set release)' : '') + '</div></div>';
+      '<div class="health-item"><div class="health-value' + (behind ? ' health-value--behind' : '') + '">' + (behind === null ? '—' : behind.toLocaleString()) + '</div><div class="health-label">Active installs behind' + (behind === null ? ' (set release)' : '') + '</div></div>';
   }
 
   function renderChart() {
@@ -2061,11 +2092,13 @@ function dashboardHtml(): string {
       var lastSeenRel = i.last_seen ? relTime(i.last_seen) : '-';
 
       var devBadge = (!excludeDev && i.is_dev) ? '<span class="dev-badge">dev</span>' : '';
+      var activity = installActivity(i);
+      var activityBadge = activity ? '<span class="activity-badge ' + activity + '">' + (activity === 'new' ? 'new this week' : 'quiet') + '</span>' : '';
       var releaseVersion = (projectSettings[selectedProject] || {}).release_version || '';
       var behindBadge = releaseVersion && isActiveAt(i, Date.now()) && isBehindRelease(i.version, releaseVersion) ? '<span class="behind-badge">behind</span>' : '';
       var dataRow = '<tr class="install-data-row' + (isExpanded ? ' row-expanded' : '') + '" data-id="' + esc(i.install_id || '') + '">' +
         '<td class="col-chevron">' + (isExpanded ? '▼' : '▶') + '</td>' +
-        '<td class="col-installid install-id-cell">' + esc(i.install_id || 'unknown') + devBadge + '</td>' +
+        '<td class="col-installid install-id-cell">' + esc(i.install_id || 'unknown') + devBadge + activityBadge + '</td>' +
         '<td class="col-os">' + esc(osLabel) + '</td>' +
         '<td class="col-arch">' + esc(i.arch || '-') + '</td>' +
         '<td class="col-version">' + esc(i.version || '-') + behindBadge + '</td>' +
@@ -2087,6 +2120,7 @@ function dashboardHtml(): string {
           '<div class="detail-field"><span class="detail-key">Version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">Architecture</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">Operating system</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Activity</span><span class="detail-val">' + (activity === 'new' ? 'New this week' : activity === 'quiet' ? 'Quiet for 7+ days' : 'Reporting this week') + '</span></div>' +
           projectDetailFields +
           '<div class="detail-field"><span class="detail-key">First seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">Last seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
