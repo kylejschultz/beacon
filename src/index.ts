@@ -1932,7 +1932,6 @@ function dashboardHtml(): string {
           '<div class="detail-field"><span class="detail-key">Architecture</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">Operating system</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
           projectDetailFields +
-          '<div class="detail-field"><span class="detail-key">Project</span><span class="detail-val">' + esc(projectLabel(i.project || '')) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">First seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
           '<div class="detail-field"><span class="detail-key">Last seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
           '</div></div></td></tr>';
