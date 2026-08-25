@@ -135,6 +135,10 @@ export default {
       return handleProjects(request, env);
     }
 
+    if (request.method === "POST" && url.pathname === "/project-settings") {
+      return handleProjectSettings(request, env);
+    }
+
     if (request.method === "POST" && url.pathname === "/auth") {
       return handleAuth(request, env);
     }
@@ -172,6 +176,18 @@ export default {
       await env.ANALYTICS_DB.prepare(
         `DELETE FROM installs WHERE last_seen < datetime('now', '-30 days')`
       ).run();
+
+      const projects = await env.ANALYTICS_DB.prepare(
+        `SELECT project, github_repo FROM project_settings WHERE github_repo IS NOT NULL`
+      ).all<{ project: string; github_repo: string }>();
+      for (const project of projects.results) {
+        const releaseVersion = await fetchLatestGitHubRelease(project.github_repo);
+        if (releaseVersion) {
+          await env.ANALYTICS_DB.prepare(
+            `UPDATE project_settings SET release_version = ?, updated_at = CURRENT_TIMESTAMP WHERE project = ?`
+          ).bind(releaseVersion, project.project).run();
+        }
+      }
     } catch {
       // cron failure must not affect /ping
     }
@@ -369,6 +385,7 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
   const excludeDev = url.searchParams.get("exclude_dev") === "true";
   const now = Date.now();
   const recentActiveStart = new Date(now - RECENT_ACTIVE_HOURS * 60 * 60 * 1000).toISOString();
+  const weekStart = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
   const activeStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleStart = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
   const staleEnd = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -377,6 +394,7 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
 
   let recentActiveResult: { count: number } | null;
   let activeResult: { count: number } | null;
+  let weekResult: { count: number } | null;
   let retainedResult: { count: number } | null;
   let totalResult: { count: number } | null;
   let staleResult: { count: number } | null;
@@ -389,6 +407,9 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
     activeResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?${devFilter}`
     ).bind(activeStart, filterProject).first<{ count: number }>();
+    weekResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ? AND project = ?${devFilter}`
+    ).bind(weekStart, filterProject).first<{ count: number }>();
     retainedResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE project = ?${devFilter}`
     ).bind(filterProject).first<{ count: number }>();
@@ -417,6 +438,9 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
     activeResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?${devFilter}`
     ).bind(activeStart).first<{ count: number }>();
+    weekResult = await env.ANALYTICS_DB.prepare(
+      `SELECT COUNT(*) AS count FROM installs WHERE last_seen >= ?${devFilter}`
+    ).bind(weekStart).first<{ count: number }>();
     retainedResult = await env.ANALYTICS_DB.prepare(
       `SELECT COUNT(*) AS count FROM installs WHERE 1=1${devFilter}`
     ).first<{ count: number }>();
@@ -444,6 +468,7 @@ async function handleSummary(request: Request, env: Env): Promise<Response> {
       active_recent: recentActiveResult?.count ?? 0,
       active: activeResult?.count ?? 0,
       active_30d: activeResult?.count ?? 0,
+      active_week: weekResult?.count ?? 0,
       retained: retainedResult?.count ?? 0,
       total: totalResult?.count ?? 0,
       stale: staleResult?.count ?? 0,
@@ -557,18 +582,105 @@ async function handleProjects(request: Request, env: Env): Promise<Response> {
   }
 
   const result = await env.ANALYTICS_DB.prepare(
-    `SELECT project FROM installs
-     UNION
-     SELECT project FROM install_lifetime
-     UNION
-     SELECT project FROM install_history
-     ORDER BY project ASC`
-  ).all<{ project: string }>();
+    `SELECT p.project, ps.display_name, ps.icon, ps.release_version, ps.github_repo FROM (
+       SELECT project FROM installs
+       UNION
+       SELECT project FROM install_lifetime
+       UNION
+       SELECT project FROM install_history
+     ) p
+     LEFT JOIN project_settings ps ON ps.project = p.project
+     ORDER BY p.project ASC`
+  ).all<{ project: string; display_name: string | null; icon: string | null; release_version: string | null; github_repo: string | null }>();
 
   return new Response(JSON.stringify({
-    projects: result.results.map((row) => row.project),
+    projects: result.results,
   }), {
     status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+const PROJECT_ICONS = new Set([
+  "ti-chart-dots-3", "ti-box", "ti-device-desktop", "ti-music", "ti-server",
+  "ti-radio", "ti-code", "ti-app-window",
+]);
+const GITHUB_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+async function fetchLatestGitHubRelease(githubRepo: string): Promise<string | null> {
+  try {
+    const response = await fetch(`https://api.github.com/repos/${githubRepo}/releases/latest`, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "Beacon-release-checker",
+      },
+    });
+    if (!response.ok) return null;
+    const release = await response.json<{ tag_name?: unknown }>();
+    return typeof release.tag_name === "string" && release.tag_name.length <= MAX_FIELD_LENGTH
+      ? release.tag_name
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleProjectSettings(request: Request, env: Env): Promise<Response> {
+  if (!await verifyBearerJWT(request, env)) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  let body: { project?: unknown; display_name?: unknown; icon?: unknown; release_version?: unknown; github_repo?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const project = typeof body.project === "string" ? body.project.trim() : "";
+  const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
+  const icon = typeof body.icon === "string" ? body.icon : "";
+  const releaseVersion = typeof body.release_version === "string" ? body.release_version.trim() : null;
+  const githubRepo = typeof body.github_repo === "string" ? body.github_repo.trim() : null;
+  if (!project || project.length > MAX_FIELD_LENGTH || !displayName || displayName.length > 64 || !PROJECT_ICONS.has(icon) || (releaseVersion !== null && releaseVersion.length > MAX_FIELD_LENGTH) || (githubRepo !== null && githubRepo !== "" && !GITHUB_REPO_PATTERN.test(githubRepo))) {
+    return new Response(JSON.stringify({ error: "Invalid project settings" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const knownProject = await env.ANALYTICS_DB.prepare(
+    `SELECT 1 AS found FROM installs WHERE project = ?
+     UNION SELECT 1 AS found FROM install_lifetime WHERE project = ?
+     UNION SELECT 1 AS found FROM install_history WHERE project = ? LIMIT 1`
+  ).bind(project, project, project).first<{ found: number }>();
+  if (!knownProject) {
+    return new Response(JSON.stringify({ error: "Unknown project" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const githubReleaseVersion = githubRepo ? await fetchLatestGitHubRelease(githubRepo) : null;
+  const resolvedReleaseVersion = githubReleaseVersion || releaseVersion || null;
+  await env.ANALYTICS_DB.prepare(
+    `INSERT INTO project_settings (project, display_name, icon, release_version, github_repo, updated_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(project) DO UPDATE SET
+       display_name = excluded.display_name,
+       icon = excluded.icon,
+       release_version = excluded.release_version,
+       github_repo = excluded.github_repo,
+       updated_at = excluded.updated_at`
+  ).bind(project, displayName, icon, resolvedReleaseVersion, githubRepo || null).run();
+
+  return new Response(JSON.stringify({ project, display_name: displayName, icon, release_version: resolvedReleaseVersion, github_repo: githubRepo || null, github_release_found: Boolean(githubReleaseVersion) }), {
     headers: { "Content-Type": "application/json" },
   });
 }
@@ -583,7 +695,10 @@ function handleDashboard(): Response {
   const html = dashboardHtml();
   return new Response(html, {
     status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
   });
 }
 
@@ -595,10 +710,10 @@ function dashboardHtml(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Beacon</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"><\/script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0d1117; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; overflow-x: hidden; }
+    html, body { width: 100%; max-width: 100%; overflow-x: clip; }
+    body { background: #0d1117; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; overscroll-behavior-x: none; }
 
     /* ---- Login ---- */
     #login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -618,10 +733,32 @@ function dashboardHtml(): string {
     .login-card button[type="submit"]:hover { opacity: 0.9; }
     #login-error { color: #f87171; font-size: 0.85rem; margin-top: 0.6rem; display: none; }
 
-    /* ---- Header ---- */
-    header { display: flex; align-items: center; padding: 1rem 1.5rem; border-bottom: 1px solid #21293a; }
-    .header-logo { display: flex; align-items: center; gap: 0.5rem; }
-    .header-actions { display: inline-flex; align-items: center; gap: 0.6rem; margin-left: 1rem; }
+    /* ---- App shell ---- */
+    .app-shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
+    .sidebar { background: #10161f; border-right: 1px solid #21293a; padding: 1.35rem 1rem; display: flex; flex-direction: column; gap: 1.35rem; }
+    .sidebar-logo { display: flex; align-items: center; gap: 0.5rem; padding: 0 0.5rem; }
+    .sidebar-section-label { color: #64748b; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; padding: 0 0.5rem; margin-bottom: 0.5rem; }
+    .project-nav { display: grid; gap: 0.25rem; }
+    .overview-nav { margin-bottom: 0.35rem; }
+    .project-nav-group { display: grid; gap: 0.2rem; }
+    .project-subnav { display: grid; gap: 0.15rem; margin: 0 0 0.2rem 1.55rem; padding-left: 0.7rem; border-left: 1px solid #263244; }
+    .project-subnav-item { border: 0; background: transparent; color: #64748b; cursor: pointer; font-size: 0.78rem; padding: 0.35rem 0.25rem; text-align: left; }
+    .project-subnav-item:hover, .project-subnav-item.active { color: #67e8f9; }
+    .project-nav-chevron { margin-left: auto; color: #64748b; font-size: 0.75rem; }
+    .project-nav-item { display: flex; align-items: center; width: 100%; gap: 0.65rem; border: 1px solid transparent; border-radius: 7px; padding: 0.62rem 0.7rem; color: #94a3b8; background: transparent; cursor: pointer; font-size: 0.9rem; text-align: left; }
+    .project-nav-item:hover { background: rgba(148,163,184,0.08); color: #e2e8f0; }
+    .project-nav-item.active { background: rgba(34,211,238,0.1); border-color: rgba(34,211,238,0.18); color: #67e8f9; }
+    .project-nav-icon { color: #22d3ee; font-size: 1rem; }
+    .sidebar-controls { padding: 0 0.25rem; }
+    .sidebar-controls .pill-btn { width: 100%; justify-content: center; }
+    .mobile-menu-btn { display: none; align-items: center; justify-content: center; width: 2.3rem; height: 2.3rem; border: 1px solid #293244; border-radius: 6px; background: #111822; color: #67e8f9; cursor: pointer; font-size: 1.15rem; }
+    .mobile-menu-btn:hover { background: rgba(34,211,238,0.08); border-color: rgba(34,211,238,0.45); }
+    .nav-backdrop { display: none; border: 0; padding: 0; cursor: pointer; }
+    .content { min-width: 0; }
+    .content-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.25rem 2rem; border-bottom: 1px solid #21293a; }
+    .page-title { font-size: 1.1rem; font-weight: 650; color: #f1f5f9; }
+    .page-subtitle { color: #64748b; font-size: 0.82rem; margin-top: 0.22rem; }
+    .header-actions { display: inline-flex; align-items: center; gap: 0.6rem; }
     .pill-btn {
       display: inline-flex; align-items: center; gap: 0.4rem;
       background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.2);
@@ -636,10 +773,38 @@ function dashboardHtml(): string {
     }
 
     /* ---- Main ---- */
-    main { max-width: 960px; width: 100%; margin: 0 auto; padding: 1.5rem; }
+    main { max-width: 1320px; width: 100%; margin: 0 auto; padding: 2rem; }
+
+    /* ---- All projects overview ---- */
+    .overview-intro { color: #94a3b8; font-size: 0.92rem; margin: 0 0 1.5rem; }
+    .overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
+    .overview-card { appearance: none; width: 100%; text-align: left; color: inherit; cursor: pointer; background: #161b22; border: 1px solid #21293a; border-radius: 10px; padding: 1.2rem; transition: background 0.15s, border-color 0.15s, transform 0.15s; }
+    .overview-card:hover { background: rgba(34,211,238,0.04); border-color: rgba(34,211,238,0.38); transform: translateY(-1px); }
+    .overview-card-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 1.1rem; }
+    .overview-card-title { color: #f1f5f9; font-size: 1rem; font-weight: 650; }
+    .overview-status { color: #67e8f9; background: rgba(34,211,238,0.1); border-radius: 20px; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 600; white-space: nowrap; }
+    .overview-status.quiet { color: #94a3b8; background: rgba(148,163,184,0.1); }
+    .overview-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .overview-value { color: #f1f5f9; font-size: 1.75rem; font-weight: 700; line-height: 1; margin-bottom: 0.35rem; }
+    .overview-label { color: #64748b; font-size: 0.77rem; }
+    .data-health { margin-top: 1.5rem; background: #161b22; border: 1px solid #21293a; border-radius: 10px; overflow: hidden; }
+    .data-health-header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: 1rem 1.2rem; border-bottom: 1px solid #21293a; }
+    .data-health-title { color: #f1f5f9; font-size: 0.95rem; font-weight: 650; }
+    .data-health-note { color: #64748b; font-size: 0.78rem; }
+    .data-health-list { display: grid; }
+    .data-health-columns, .data-health-row { display: grid; grid-template-columns: minmax(9rem, 1.4fr) 1fr 1fr; gap: 1rem; align-items: center; }
+    .data-health-columns { padding: 0.6rem 1.2rem; color: #64748b; font-size: 0.68rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid #21293a; }
+    .data-health-row { padding: 0.9rem 1.2rem; border-bottom: 1px solid #21293a; }
+    .data-health-row:last-child { border-bottom: 0; }
+    .data-health-project { display: inline-flex; align-items: center; gap: 0.5rem; color: #e2e8f0; font-size: 0.88rem; font-weight: 600; min-width: 0; }
+    .data-health-value { color: #cbd5e1; font-size: 0.84rem; }
+    .data-health-value.quiet { color: #fbbf24; }
+    .data-health-value.good { color: #67e8f9; }
+    .data-health-label { display: none; color: #64748b; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.18rem; }
+    @media (max-width: 700px) { .data-health-columns { display: none; } .data-health-row { grid-template-columns: 1fr 1fr; gap: 0.75rem; } .data-health-project { grid-column: 1 / -1; } .data-health-label { display: block; } }
 
     /* ---- Stat cards ---- */
-    .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    .stat-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
     @media (max-width: 800px) { .stat-cards { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 420px) { .stat-cards { grid-template-columns: 1fr; } }
     .stat-card {
@@ -653,35 +818,55 @@ function dashboardHtml(): string {
     .stat-value--new { color: #22d3ee; }
     .stat-label { font-size: 0.82rem; color: #64748b; }
 
-    /* ---- Chart ---- */
-    .chart-section {
-      background: #161b22; border: 1px solid #21293a; border-radius: 8px;
-      padding: 1.25rem 1.25rem 2rem; margin-bottom: 1.5rem;
-    }
-    .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
-    .chart-title { font-size: 0.82rem; color: #64748b; }
-    .chart-section canvas { display: block; width: 100% !important; height: 180px !important; }
+    /* ---- Project health ---- */
+    .project-health { background: #161b22; border: 1px solid #21293a; border-radius: 8px; padding: 1.15rem 1.25rem; margin-bottom: 1.5rem; }
+    .project-health-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+    .project-health-title { color: #94a3b8; font-size: 0.78rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+    .project-health-note { color: #64748b; font-size: 0.76rem; }
+    .project-health-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+    .health-item { min-width: 0; }
+    .health-value { color: #f1f5f9; font-size: 1.05rem; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .health-value--good { color: #67e8f9; }
+    .health-value--behind { color: #fbbf24; }
+    .health-label { color: #64748b; font-size: 0.75rem; margin-top: 0.28rem; }
+    @media (max-width: 700px) { .project-health-grid { grid-template-columns: 1fr 1fr; } }
 
     /* ---- Breakdowns ---- */
     .breakdown-wrap {
       background: #161b22; border: 1px solid #21293a; border-radius: 8px;
       padding: 1.25rem; margin-bottom: 1.5rem;
     }
-    .breakdown-wrap-header { margin-bottom: 0.75rem; }
+    .breakdown-wrap-header { margin-bottom: 1rem; }
     .breakdown-wrap-title { font-size: 0.82rem; color: #64748b; }
-    .breakdown-section { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; }
-    @media (max-width: 980px) { .breakdown-section { grid-template-columns: 1fr 1fr 1fr; } }
+    .breakdown-section { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    @media (max-width: 980px) { .breakdown-section { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 700px) { .breakdown-section { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 460px) { .breakdown-section { grid-template-columns: 1fr; } }
-    .breakdown-card { background: #161b22; border: 1px solid #21293a; border-radius: 8px; padding: 1rem; }
+    .breakdown-card { min-width: 0; }
     .breakdown-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 0.75rem; }
-    .breakdown-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
-    .breakdown-label { min-width: 52px; font-size: 0.8rem; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-    .breakdown-bar-track { flex: 1; height: 3px; background: #21293a; border-radius: 2px; overflow: hidden; }
-    .breakdown-bar { height: 100%; background: #22d3ee; border-radius: 2px; transition: width 0.3s ease; }
-    .breakdown-pct { font-size: 0.75rem; color: #64748b; width: 32px; text-align: right; flex-shrink: 0; }
-    .breakdown-value { font-size: 0.75rem; color: #64748b; width: 64px; text-align: right; flex-shrink: 0; }
+    .running-tags { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+    .running-tag { display: inline-flex; align-items: center; gap: 0.4rem; max-width: 100%; color: #cbd5e1; background: #1c2230; border: 1px solid #293244; border-radius: 6px; padding: 0.32rem 0.48rem; font-size: 0.78rem; }
+    .running-tag-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .running-tag-count { color: #67e8f9; font-size: 0.72rem; }
     .empty-text { font-size: 0.8rem; color: #64748b; }
+
+    /* ---- Project settings ---- */
+    .settings-card { max-width: 620px; background: #161b22; border: 1px solid #21293a; border-radius: 8px; padding: 1.25rem; }
+    .settings-card-title { color: #f1f5f9; font-size: 1rem; font-weight: 650; margin-bottom: 0.35rem; }
+    .settings-card-note { color: #64748b; font-size: 0.82rem; margin-bottom: 1.5rem; }
+    .settings-field { display: grid; gap: 0.5rem; margin-bottom: 1.2rem; }
+    .settings-label { color: #94a3b8; font-size: 0.8rem; font-weight: 600; }
+    .settings-input { width: 100%; background: #0d1117; color: #e2e8f0; border: 1px solid #293244; border-radius: 6px; padding: 0.65rem 0.75rem; font: inherit; font-size: 0.9rem; outline: none; }
+    .settings-input:focus { border-color: #22d3ee; }
+    .settings-help { color: #64748b; font-size: 0.76rem; line-height: 1.35; }
+    .icon-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .icon-choice { width: 2.45rem; height: 2.25rem; display: inline-flex; align-items: center; justify-content: center; background: #111822; color: #94a3b8; border: 1px solid #293244; border-radius: 6px; cursor: pointer; font-size: 1rem; }
+    .icon-choice:hover, .icon-choice.active { color: #67e8f9; border-color: #22d3ee; background: rgba(34,211,238,0.08); }
+    .settings-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 1.5rem; }
+    .settings-save { border: 0; background: #22d3ee; color: #0d1117; border-radius: 6px; padding: 0.58rem 0.85rem; font-size: 0.85rem; font-weight: 650; cursor: pointer; }
+    .settings-save:disabled { opacity: 0.55; cursor: default; }
+    .settings-status { color: #64748b; font-size: 0.8rem; }
+    .settings-status.error { color: #f87171; }
 
     /* ---- Details section ---- */
     .details-section { background: #161b22; border: 1px solid #21293a; border-radius: 8px; }
@@ -720,57 +905,64 @@ function dashboardHtml(): string {
     .dropdown-item.active { color: #22d3ee; }
 
     /* ---- Install table ---- */
-    .install-table-wrap { overflow-x: auto; }
-    .install-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
-    .install-table th {
-      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
-      color: #64748b; padding: 0 0.6rem 0.6rem; text-align: left; font-weight: 500;
-      white-space: nowrap; border-bottom: 1px solid #21293a;
-      position: relative; overflow: hidden;
-    }
-    .th-resize-handle {
-      position: absolute; top: 0; right: 0; width: 2px; height: 100%;
-      cursor: col-resize; background: #21293a; z-index: 1;
-    }
-    .th-resize-handle:hover, .th-resize-handle.dragging { background: #22d3ee; }
-    @media (max-width: 640px) { .th-resize-handle { display: none; } }
-    .install-table th.th-sortable { cursor: pointer; user-select: none; }
-    .install-table th.th-sortable:hover { color: #94a3b8; }
-    .install-table th.col-chevron { width: 32px; padding-right: 0; }
-    .sort-active { color: #22d3ee; }
-    .sort-inactive { opacity: 0.3; font-size: 0.8em; }
-    .install-table td {
-      padding: 0.7rem 0.6rem; border-top: 1px solid #21293a;
-      font-size: 0.85rem; color: #e2e8f0; white-space: nowrap;
-    }
-    .install-table td.col-chevron { color: #64748b; font-size: 0.7rem; text-align: center; padding-right: 0; }
-    .install-table tbody tr.install-data-row { cursor: pointer; }
-    .install-table tbody tr.install-data-row:hover td { background: rgba(255,255,255,0.02); }
-    .install-table tbody tr.row-expanded td { background: rgba(34,211,238,0.03); }
-    .install-table tbody tr.install-detail-row > td { padding: 0; cursor: default; background: none !important; border-top: none; }
+    .install-table-wrap { overflow: visible; }
+    .install-list-header { display: grid; grid-template-columns: 18px minmax(0, 1fr) 7rem 8rem; gap: 1.25rem; align-items: center; padding: 0 0.9rem 0.55rem; color: #64748b; font-size: 0.68rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+    .install-sort-btn { appearance: none; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; letter-spacing: inherit; text-transform: inherit; padding: 0; text-align: right; }
+    .install-sort-btn:hover, .install-sort-btn.active { color: #67e8f9; }
+    .install-table, .install-table tbody { display: block; width: 100%; }
+    .install-table thead, .install-table colgroup { display: none; }
+    .install-table tbody { display: grid; gap: 0.6rem; }
+    .install-table tbody tr.install-data-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) 7rem 8rem; grid-template-areas: 'chevron install version seen'; align-items: center; gap: 1.25rem; cursor: pointer; background: #111822; border: 1px solid #21293a; border-radius: 8px; padding: 0.8rem 0.9rem; }
+    .install-table tbody tr.install-data-row:hover, .install-table tbody tr.row-expanded { border-color: rgba(34,211,238,0.45); background: rgba(34,211,238,0.04); }
+    .install-table td { padding: 0; border: 0; min-width: 0; font-size: 0.82rem; color: #cbd5e1; }
+    .install-table td.col-chevron { grid-area: chevron; color: #64748b; font-size: 0.65rem; }
+    .install-table td.col-installid { grid-area: install; }
+    .install-table td.col-version { grid-area: version; color: #67e8f9; text-align: right; }
+    .install-table td.col-lastseen { grid-area: seen; color: #94a3b8; text-align: right; }
+    .install-table td.col-os, .install-table td.col-arch, .install-table td.col-firstseen { display: none; }
+    .install-table tbody tr.install-detail-row { display: block; }
+    .install-table tbody tr.install-detail-row > td { display: block; padding: 0; cursor: default; }
     .install-id-cell { font-family: monospace; font-size: 0.85rem; color: #22d3ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .install-detail-panel { background: #1c2230; border-top: 1px solid #21293a; padding: 0.85rem 1rem; }
-    .detail-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem 1rem; }
-    @media (max-width: 640px) { .detail-grid { grid-template-columns: 1fr 1fr; } }
-    .detail-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
-    .detail-key { font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
-    .detail-val { font-size: 0.82rem; color: #e2e8f0; word-break: break-all; overflow-wrap: anywhere; }
-    .detail-mono { font-family: monospace; font-size: 0.76rem; }
+    .install-detail-panel { background: #161d28; border-top: 1px solid #293244; padding: 0.9rem; }
+    .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+    .detail-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; padding: 0.65rem 0.7rem; background: #111822; border: 1px solid #263244; border-radius: 6px; }
+    .detail-field--wide { grid-column: 1 / -1; }
+    .detail-key { font-size: 0.67rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; }
+    .detail-val { font-size: 0.84rem; color: #e2e8f0; overflow-wrap: anywhere; }
+    .detail-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: #67e8f9; }
+    @media (max-width: 540px) { .detail-grid { grid-template-columns: 1fr; } .detail-field--wide { grid-column: auto; } }
+    @media (max-width: 640px) {
+      .install-list-header, .install-table tbody tr.install-data-row { grid-template-columns: 16px minmax(0, 1fr) 4.25rem 4.75rem; gap: 0.5rem; padding-left: 0.7rem; padding-right: 0.7rem; }
+    }
     .empty-row { font-size: 0.85rem; color: #64748b; padding: 1rem 0.6rem; }
     .pagination { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0 0; justify-content: center; }
     .pagination-btn { display: inline-flex; align-items: center; background: transparent; border: 1px solid #21293a; color: #64748b; border-radius: 20px; padding: 0.3rem 0.75rem; font-size: 0.82rem; cursor: pointer; }
     .pagination-btn:hover:not([disabled]) { border-color: #475569; color: #e2e8f0; }
     .pagination-btn[disabled] { opacity: 0.4; cursor: default; }
     .pagination-info { font-size: 0.82rem; color: #64748b; }
-    @media (max-width: 640px) {
-      .col-os, .col-arch, .col-lastseen { display: none; }
-    }
+    @media (max-width: 640px) { .install-list-header { grid-template-columns: 18px minmax(0, 1fr) auto; } .install-list-header .version-header { display: none; } .install-table tbody tr.install-data-row { grid-template-columns: 18px minmax(0, 1fr) auto; grid-template-areas: 'chevron install seen' 'chevron version version'; } }
     .dev-badge {
       display: inline-flex; align-items: center;
       background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.3);
       color: #fbbf24; border-radius: 20px; padding: 0.1rem 0.45rem;
       font-size: 0.7rem; font-weight: 600; margin-left: 0.35rem; vertical-align: middle;
     }
+    .behind-badge { display: inline-flex; align-items: center; margin-left: 0.4rem; border: 1px solid rgba(251,191,36,0.32); border-radius: 20px; padding: 0.08rem 0.35rem; color: #fbbf24; background: rgba(251,191,36,0.1); font-size: 0.66rem; font-weight: 650; vertical-align: middle; }
+    @media (max-width: 800px) {
+      .app-shell, .content, .content-header, main { width: 100%; max-width: 100%; min-width: 0; }
+      .app-shell { grid-template-columns: minmax(0, 1fr); }
+      .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 100; width: min(82vw, 300px); min-height: 100vh; overflow-y: auto; border-right: 1px solid #293244; border-bottom: 0; padding: 1.35rem 1rem; gap: 1.35rem; box-shadow: 14px 0 36px rgba(0,0,0,0.35); transform: translateX(-105%); transition: transform 0.2s ease; }
+      .app-shell.nav-open .sidebar { transform: translateX(0); }
+      .nav-backdrop { position: fixed; inset: 0; z-index: 90; background: rgba(3,7,18,0.68); backdrop-filter: blur(2px); }
+      .app-shell.nav-open .nav-backdrop { display: block; }
+      .mobile-menu-btn { display: inline-flex; flex-shrink: 0; }
+      .content-header { padding: 0.8rem 1rem; }
+      .content-header > div:first-child { display: flex; align-items: center; gap: 0.75rem; min-width: 0; overflow: hidden; }
+      .page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .header-actions { flex-shrink: 0; }
+      main { padding: 1.25rem; }
+    }
+    @media (max-width: 520px) { .content-header { align-items: flex-start; } .page-subtitle { display: none; } }
   </style>
 </head>
 <body>
@@ -789,72 +981,84 @@ function dashboardHtml(): string {
   </div>
 </div>
 
-<div id="dashboard-page" style="display:none">
-  <header>
-    <div class="header-logo">
+<div id="dashboard-page" style="display:none" class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
       <span class="logo-dot"></span>
       <span class="logo-text">beacon</span>
-      <span class="pill-badge" id="project-badge">nestview</span>
     </div>
-    <div class="header-actions">
-      <div class="dropdown-wrap">
-        <button class="pill-btn" id="project-btn">
-          <span id="project-btn-label">nestview</span>
-          <i class="ti ti-chevron-down"></i>
-        </button>
-        <div class="dropdown-menu hidden" id="project-menu"></div>
-      </div>
+    <div class="sidebar-controls">
       <button class="pill-btn" id="dev-toggle"></button>
     </div>
-  </header>
+    <nav class="project-nav overview-nav">
+      <button class="project-nav-item" id="overview-nav-item">
+        <i class="ti ti-layout-dashboard project-nav-icon"></i>All projects
+      </button>
+    </nav>
+    <div>
+      <div class="sidebar-section-label">Projects</div>
+      <nav class="project-nav" id="project-nav"></nav>
+    </div>
+  </aside>
+  <button class="nav-backdrop" id="nav-backdrop" type="button" aria-label="Close navigation"></button>
 
-  <main>
-    <div class="stat-cards">
-      <div class="stat-card" data-filter="active">
-        <div class="stat-value" id="stat-active">-</div>
-        <div class="stat-label">Active 36h</div>
+  <div class="content">
+    <header class="content-header">
+      <div>
+        <button class="mobile-menu-btn" id="mobile-menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false"><i class="ti ti-menu-2"></i></button>
+        <div>
+          <div class="page-title" id="project-heading">Nestview</div>
+          <div class="page-subtitle" id="project-subtitle">Installation telemetry and project health</div>
+        </div>
       </div>
-      <div class="stat-card" data-filter="all">
+      <div class="header-actions">
+        <span class="pill-badge">Live data</span>
+      </div>
+    </header>
+    <main>
+    <section id="overview-page" hidden>
+      <p class="overview-intro">A live readout of every project reporting to Beacon.</p>
+      <div class="overview-grid" id="overview-grid"></div>
+      <section class="data-health" id="data-health">
+        <div class="data-health-header">
+          <span class="data-health-title">Data health</span>
+          <span class="data-health-note">New and quiet install activity</span>
+        </div>
+        <div class="data-health-list" id="data-health-list"></div>
+      </section>
+    </section>
+    <div id="project-dashboard">
+    <div id="project-overview-content">
+    <div class="stat-cards">
+      <div class="stat-card" data-filter="recent">
+        <div class="stat-value" id="stat-active">-</div>
+        <div class="stat-label">Seen this week</div>
+      </div>
+      <div class="stat-card" data-filter="inactive">
         <div class="stat-value" id="stat-retained">-</div>
-        <div class="stat-label">Seen 30d</div>
+        <div class="stat-label">Inactive 7–30d</div>
       </div>
       <div class="stat-card">
         <div class="stat-value" id="stat-total">-</div>
         <div class="stat-label">All-time installs</div>
       </div>
-      <div class="stat-card" data-filter="new_today">
+      <div class="stat-card" data-filter="new_week">
         <div class="stat-value stat-value--new" id="stat-new">-</div>
-        <div class="stat-label">New today</div>
-      </div>
-      <div class="stat-card" data-filter="stale">
-        <div class="stat-value stat-value--stale" id="stat-stale">-</div>
-        <div class="stat-label">Quiet 36h+</div>
+        <div class="stat-label">New this week</div>
       </div>
     </div>
 
-    <div class="chart-section">
-      <div class="chart-header">
-        <span class="chart-title" id="chart-title">Active installs - last 24h</span>
-        <div class="dropdown-wrap">
-          <button class="pill-btn" id="window-btn">
-            <span id="window-btn-label">1d</span>
-            <i class="ti ti-chevron-down"></i>
-          </button>
-          <div class="dropdown-menu hidden" id="window-menu">
-            <div class="dropdown-item" data-value="1">1d</div>
-            <div class="dropdown-item" data-value="7">7d</div>
-            <div class="dropdown-item" data-value="14">14d</div>
-            <div class="dropdown-item" data-value="30">30d</div>
-            <div class="dropdown-item" data-value="90">90d</div>
-          </div>
-        </div>
+    <section class="project-health">
+      <div class="project-health-header">
+        <span class="project-health-title">Project health</span>
+        <span class="project-health-note" id="project-health-note"></span>
       </div>
-      <canvas id="history-chart"></canvas>
-    </div>
+      <div class="project-health-grid" id="project-health-grid"></div>
+    </section>
 
     <div class="breakdown-wrap">
       <div class="breakdown-wrap-header">
-        <span class="breakdown-wrap-title">Breakdown</span>
+        <span class="breakdown-wrap-title">What’s running</span>
       </div>
       <div class="breakdown-section">
         <div class="breakdown-card">
@@ -869,15 +1073,12 @@ function dashboardHtml(): string {
           <div class="breakdown-title">OS</div>
           <div id="breakdown-os"></div>
         </div>
-        <div class="breakdown-card">
-          <div class="breakdown-title">Channel</div>
-          <div id="breakdown-channel"></div>
-        </div>
         <div class="breakdown-card" id="breakdown-project-stats-card" hidden>
           <div class="breakdown-title">Library Size</div>
           <div id="breakdown-project-stats"></div>
         </div>
       </div>
+    </div>
     </div>
 
     <div id="details-section" class="details-section">
@@ -887,10 +1088,10 @@ function dashboardHtml(): string {
       <div id="details-body">
         <div class="filter-bar">
           <div class="filter-selector-group" id="filter-selector">
-            <button class="fs-btn fs-btn--active" data-filter-opt="all">All installs</button>
-            <button class="fs-btn" data-filter-opt="active">Active (36h)</button>
-            <button class="fs-btn" data-filter-opt="new_today">New today</button>
-            <button class="fs-btn" data-filter-opt="stale">Quiet 36h+</button>
+            <button class="fs-btn fs-btn--active" data-filter-opt="all">Reporting (30d)</button>
+            <button class="fs-btn" data-filter-opt="recent">Seen this week</button>
+            <button class="fs-btn" data-filter-opt="new_week">New this week</button>
+            <button class="fs-btn" data-filter-opt="inactive">Inactive 7–30d</button>
           </div>
           <div class="dropdown-wrap">
             <button class="dropdown-btn" id="filter-version">
@@ -933,6 +1134,11 @@ function dashboardHtml(): string {
             </div>
           </div>
         </div>
+        <div class="install-list-header" id="install-list-header">
+          <span></span><span>Install</span>
+          <button class="install-sort-btn version-header" data-sort="version">Version</button>
+          <button class="install-sort-btn" data-sort="last_seen">Last seen</button>
+        </div>
         <div class="install-table-wrap">
           <table class="install-table">
             <colgroup id="install-colgroup">
@@ -951,20 +1157,53 @@ function dashboardHtml(): string {
         <div id="pagination-bar"></div>
       </div>
     </div>
-  </main>
+    <section id="settings-section" hidden>
+      <div class="settings-card">
+        <div class="settings-card-title">Project settings</div>
+        <p class="settings-card-note">Choose how this project appears throughout Beacon. Telemetry stays tied to its original project ID.</p>
+        <form id="project-settings-form">
+          <label class="settings-field">
+            <span class="settings-label">Friendly name</span>
+            <input class="settings-input" id="project-display-name" maxlength="64" required>
+          </label>
+          <label class="settings-field">
+            <span class="settings-label">Current release version</span>
+            <input class="settings-input" id="project-release-version" maxlength="255" placeholder="For example: 1.2.0">
+            <span class="settings-help">Used as a fallback if no GitHub release is configured.</span>
+          </label>
+          <label class="settings-field">
+            <span class="settings-label">GitHub repository</span>
+            <input class="settings-input" id="project-github-repo" maxlength="255" placeholder="owner/repository">
+            <span class="settings-help">Beacon checks the latest published release now and refreshes it daily.</span>
+          </label>
+          <div class="settings-field">
+            <span class="settings-label">Sidebar icon</span>
+            <div class="icon-picker" id="project-icon-picker"></div>
+          </div>
+          <div class="settings-actions">
+            <button class="settings-save" id="project-settings-save" type="submit">Save changes</button>
+            <span class="settings-status" id="project-settings-status" aria-live="polite"></span>
+          </div>
+        </form>
+      </div>
+    </section>
+    </div>
+    </main>
+  </div>
 </div>
 
 <script>
 (function () {
   var token = sessionStorage.getItem('beacon_token');
   var allInstalls = [];
-  var allHistory = {};
   var summary = {};
   var summaryExcludeDev = {};
+  var projectSummaries = {};
+  var projectSettings = {};
+  var availableProjects = [];
   var selectedProject = localStorage.getItem('beacon_project') || 'nestview';
-  var validWindows = [1, 7, 14, 30, 90];
-  var storedWindow = parseInt(localStorage.getItem('beacon_window_days') || '1', 10);
-  var windowDays = validWindows.indexOf(storedWindow) >= 0 ? storedWindow : 1;
+  var selectedView = localStorage.getItem('beacon_view') || 'overview';
+  var projectPage = localStorage.getItem('beacon_project_page') || 'overview';
   var excludeDev = localStorage.getItem('beacon_exclude_dev') !== 'false';
   var cardFilter = 'all';
   var detailFilters = { version: null, arch: null, os: null, channel: null };
@@ -972,17 +1211,16 @@ function dashboardHtml(): string {
   var currentPage = 1;
   var pageSize = 10;
   var currentFiltered = [];
-  var histChart = null;
   var sortCol = 'first_seen';
   var sortDir = 'desc';
 
-  var ACTIVE_MS = 36 * 3600000;
+  var RECENT_MS = 7 * 24 * 3600000;
   var MIN_COL_WIDTH = 48;
   var projectProfiles = {
     nestview: {
-      breakdownTitle: 'Containers',
-      breakdownFields: [['container_count', 'Containers']],
-      detailFields: [['container_count', 'container_count']]
+      detailFields: [
+        ['container_count', 'Containers']
+      ]
     },
     prism: {
       breakdownTitle: 'Library Size',
@@ -998,17 +1236,29 @@ function dashboardHtml(): string {
       ]
     }
   };
+  var projectIconChoices = [
+    'ti-chart-dots-3', 'ti-box', 'ti-device-desktop', 'ti-music',
+    'ti-server', 'ti-radio', 'ti-code', 'ti-app-window'
+  ];
 
   function projectProfile() {
     return projectProfiles[selectedProject] || null;
   }
 
   function isActiveAt(install, refTime) {
-    return refTime - new Date(install.last_seen).getTime() <= ACTIVE_MS;
+    return refTime - new Date(install.last_seen).getTime() <= RECENT_MS;
   }
   var colWidths = [32, 120, 80, 80, 80, 120, 120];
 
   function el(id) { return document.getElementById(id); }
+
+  function setMobileNav(open) {
+    el('dashboard-page').classList.toggle('nav-open', open);
+    el('mobile-menu-toggle').setAttribute('aria-expanded', String(open));
+    el('mobile-menu-toggle').setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+  }
+
+  function closeMobileNav() { setMobileNav(false); }
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -1047,7 +1297,7 @@ function dashboardHtml(): string {
   function isNewToday(firstSeen) {
     if (!firstSeen) return false;
     try {
-      return pacificDateStr(new Date(firstSeen)) === pacificDateStr(new Date());
+      return Date.now() - new Date(firstSeen).getTime() <= RECENT_MS;
     } catch (e) { return false; }
   }
 
@@ -1060,8 +1310,33 @@ function dashboardHtml(): string {
     return 0;
   }
 
+  function compareVersions(a, b) {
+    function parts(version) {
+      var match = String(version || '').trim().replace(/^v/i, '').match(/^(\\d+(?:\\.\\d+)*)$/);
+      return match ? match[1].split('.').map(Number) : null;
+    }
+    var pa = parts(a), pb = parts(b);
+    if (!pa || !pb) return null;
+    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+      var diff = (pa[i] || 0) - (pb[i] || 0);
+      if (diff) return diff;
+    }
+    return 0;
+  }
+
+  function isBehindRelease(version, releaseVersion) {
+    var comparison = compareVersions(version, releaseVersion);
+    return comparison !== null && comparison < 0;
+  }
+
   function projectLabel(project) {
-    return project || 'unknown';
+    var settings = projectSettings[project];
+    return (settings && settings.display_name) || project || 'unknown';
+  }
+
+  function projectIcon(project) {
+    var settings = projectSettings[project];
+    return (settings && settings.icon) || 'ti-chart-dots-3';
   }
 
   // ---- Auth ----
@@ -1072,15 +1347,24 @@ function dashboardHtml(): string {
   }
   function showDashboard() {
     el('login-page').style.display = 'none';
-    el('dashboard-page').style.display = 'block';
+    el('dashboard-page').style.display = 'grid';
   }
 
   if (token) { showDashboard(); loadData(token); renderDevToggle(); }
+
+  el('mobile-menu-toggle').addEventListener('click', function () {
+    setMobileNav(!el('dashboard-page').classList.contains('nav-open'));
+  });
+  el('nav-backdrop').addEventListener('click', closeMobileNav);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeMobileNav();
+  });
 
   el('dev-toggle').addEventListener('click', function () {
     excludeDev = !excludeDev;
     localStorage.setItem('beacon_exclude_dev', String(excludeDev));
     currentPage = 1;
+    closeMobileNav();
     render();
   });
 
@@ -1114,31 +1398,68 @@ function dashboardHtml(): string {
       return response.json();
     }).then(function (data) {
       if (!data) return;
-      var projects = data.projects || [];
+      var projectRows = data.projects || [];
+      var projects = projectRows.map(function (row) {
+        return typeof row === 'string' ? row : row.project;
+      }).filter(Boolean);
+      projectSettings = {};
+      projectRows.forEach(function (row) {
+        if (typeof row !== 'string' && row.project) {
+          projectSettings[row.project] = { display_name: row.display_name || null, icon: row.icon || null, release_version: row.release_version || null, github_repo: row.github_repo || null };
+        }
+      });
+      availableProjects = projects;
       if (projects.length && projects.indexOf(selectedProject) < 0) {
         selectedProject = projects.indexOf('nestview') >= 0 ? 'nestview' : projects[0];
         localStorage.setItem('beacon_project', selectedProject);
       }
       renderProjectPicker(projects);
+      if (selectedView === 'overview') {
+        return Promise.all(projects.map(function (project) {
+          var projectParam = encodeURIComponent(project);
+          return Promise.all([
+            fetch('/summary?project=' + projectParam, { headers: authHeaders }),
+            fetch('/summary?project=' + projectParam + '&exclude_dev=true', { headers: authHeaders }),
+            fetch('/installs?project=' + projectParam, { headers: authHeaders })
+          ]);
+        })).then(function (responseGroups) {
+          var responses = responseGroups.flat();
+          if (responses.some(function (response) { return !response.ok; })) return null;
+          return Promise.all(responseGroups.map(function (group) {
+            return Promise.all([group[0].json(), group[1].json(), group[2].json()]);
+          })).then(function (summaries) { return { overview: true, projects: projects, summaries: summaries }; });
+        });
+      }
       var projectParam = encodeURIComponent(selectedProject);
       return Promise.all([
         fetch('/installs?project=' + projectParam, { headers: authHeaders }),
-        fetch('/history?project=' + projectParam, { headers: authHeaders }),
         fetch('/summary?project=' + projectParam, { headers: authHeaders }),
         fetch('/summary?project=' + projectParam + '&exclude_dev=true', { headers: authHeaders })
       ]);
     }).then(function (responses) {
       if (!responses) return null;
-      if (!responses[0].ok || !responses[1].ok || !responses[2].ok || !responses[3].ok) {
+      if (responses.overview) return responses;
+      if (!responses[0].ok || !responses[1].ok || !responses[2].ok) {
         sessionStorage.removeItem('beacon_token'); showLogin(); return null;
       }
-      return Promise.all([responses[0].json(), responses[1].json(), responses[2].json(), responses[3].json()]);
+      return Promise.all([responses[0].json(), responses[1].json(), responses[2].json()])
+        .then(function (results) { return { overview: false, results: results }; });
     }).then(function (data) {
       if (!data) return;
-      allInstalls = data[0].installs || [];
-      allHistory = data[1].history || {};
-      summary = data[2] || {};
-      summaryExcludeDev = data[3] || {};
+      if (data.overview) {
+        projectSummaries = {};
+        data.projects.forEach(function (project, index) {
+          projectSummaries[project] = {
+            all: data.summaries[index][0] || {},
+            excludeDev: data.summaries[index][1] || {},
+            installs: (data.summaries[index][2] || {}).installs || []
+          };
+        });
+      } else {
+        allInstalls = data.results[0].installs || [];
+        summary = data.results[1] || {};
+        summaryExcludeDev = data.results[2] || {};
+      }
       render();
     }).catch(function () { sessionStorage.removeItem('beacon_token'); showLogin(); });
   }
@@ -1147,12 +1468,29 @@ function dashboardHtml(): string {
 
   function render() {
     renderDevToggle();
-    renderWindowPicker();
-    renderStatCards();
-    renderChart();
-    renderBreakdowns();
-    renderInstallDetails();
-    renderFilterSelector();
+    if (selectedView === 'overview') {
+      renderOverview();
+      return;
+    }
+    el('overview-page').hidden = true;
+    el('project-dashboard').hidden = false;
+    var showingInstalls = projectPage === 'installs';
+    var showingSettings = projectPage === 'settings';
+    el('project-heading').textContent = projectLabel(selectedProject);
+    el('project-subtitle').textContent = showingSettings ? 'Display settings for this project' : (showingInstalls ? 'Installation details and reporting history' : 'Installation telemetry and project health');
+    el('project-overview-content').hidden = showingInstalls || showingSettings;
+    el('details-section').hidden = !showingInstalls;
+    el('settings-section').hidden = !showingSettings;
+    if (showingInstalls) {
+      renderInstallDetails();
+      renderFilterSelector();
+    } else if (showingSettings) {
+      renderProjectSettings();
+    } else {
+      renderStatCards();
+      renderProjectHealth();
+      renderBreakdowns();
+    }
   }
 
   function renderDevToggle() {
@@ -1161,39 +1499,167 @@ function dashboardHtml(): string {
   }
 
   function renderProjectPicker(projects) {
-    el('project-badge').textContent = projectLabel(selectedProject);
-    el('project-btn-label').textContent = projectLabel(selectedProject);
-    el('project-menu').innerHTML = projects.length
-      ? projects.map(function (project) {
-          return '<div class="dropdown-item' + (project === selectedProject ? ' active' : '') + '" data-value="' + esc(project) + '">' + esc(projectLabel(project)) + '</div>';
-        }).join('')
-      : '<div class="dropdown-item active" data-value="nestview">nestview</div>';
+    var available = projects.length ? projects : ['nestview'];
+    el('overview-nav-item').classList.toggle('active', selectedView === 'overview');
+    el('overview-nav-item').onclick = function () {
+      selectedView = 'overview';
+      localStorage.setItem('beacon_view', selectedView);
+      closeMobileNav();
+      loadData(token);
+    };
+    el('project-nav').innerHTML = available.map(function (project) {
+      var active = selectedView === 'project' && project === selectedProject ? ' active' : '';
+      var expanded = selectedView === 'project' && project === selectedProject;
+      return '<div class="project-nav-group"><button class="project-nav-item' + active + '" data-project="' + esc(project) + '">' +
+        '<i class="ti ' + esc(projectIcon(project)) + ' project-nav-icon"></i>' + esc(projectLabel(project)) +
+        '<i class="ti ti-chevron-' + (expanded ? 'down' : 'right') + ' project-nav-chevron"></i></button>' +
+        (expanded ? '<div class="project-subnav">' +
+          '<button class="project-subnav-item' + (projectPage === 'overview' ? ' active' : '') + '" data-project="' + esc(project) + '" data-page="overview">Overview</button>' +
+          '<button class="project-subnav-item' + (projectPage === 'installs' ? ' active' : '') + '" data-project="' + esc(project) + '" data-page="installs">Installs</button>' +
+          '<button class="project-subnav-item' + (projectPage === 'settings' ? ' active' : '') + '" data-project="' + esc(project) + '" data-page="settings">Settings</button>' +
+        '</div>' : '') + '</div>';
+    }).join('');
 
-    el('project-menu').querySelectorAll('.dropdown-item').forEach(function (item) {
+    el('project-nav').querySelectorAll('.project-nav-item').forEach(function (item) {
       item.addEventListener('click', function () {
-        selectedProject = item.dataset.value || 'nestview';
+        selectedProject = item.dataset.project || 'nestview';
+        selectedView = 'project';
+        projectPage = 'overview';
         localStorage.setItem('beacon_project', selectedProject);
+        localStorage.setItem('beacon_view', selectedView);
+        localStorage.setItem('beacon_project_page', projectPage);
         cardFilter = 'all';
         detailFilters = { version: null, arch: null, os: null, channel: null };
         expandedInstallId = null;
         currentPage = 1;
         closeDropdowns();
+        closeMobileNav();
         loadData(token);
       });
     });
+    el('project-nav').querySelectorAll('.project-subnav-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        selectedProject = item.dataset.project || 'nestview';
+        selectedView = 'project';
+        projectPage = item.dataset.page || 'overview';
+        localStorage.setItem('beacon_project', selectedProject);
+        localStorage.setItem('beacon_view', selectedView);
+        localStorage.setItem('beacon_project_page', projectPage);
+        closeMobileNav();
+        loadData(token);
+      });
+    });
+  }
+
+  function renderOverview() {
+    el('overview-page').hidden = false;
+    el('project-dashboard').hidden = true;
+    el('project-heading').textContent = 'All projects';
+    el('project-subtitle').textContent = 'Installation telemetry across your apps';
+    var projects = Object.keys(projectSummaries).sort();
+    el('overview-grid').innerHTML = projects.length ? projects.map(function (project) {
+      var stats = projectSummaries[project][excludeDev ? 'excludeDev' : 'all'] || {};
+      var active = Number(stats.active_week || 0);
+      var total = Number(stats.total || 0);
+      return '<button class="overview-card" data-project="' + esc(project) + '">' +
+        '<div class="overview-card-header"><span class="overview-card-title"><i class="ti ' + esc(projectIcon(project)) + ' project-nav-icon"></i> ' + esc(projectLabel(project)) + '</span>' +
+        '<span class="overview-status' + (active ? '' : ' quiet') + '">' + (active ? 'Seen this week' : 'No recent check-ins') + '</span></div>' +
+        '<div class="overview-stats"><div><div class="overview-value">' + active.toLocaleString() + '</div><div class="overview-label">Seen this week</div></div>' +
+        '<div><div class="overview-value">' + total.toLocaleString() + '</div><div class="overview-label">All-time installs</div></div></div></button>';
+    }).join('') : '<span class="empty-text">No projects have reported telemetry yet.</span>';
+    el('overview-grid').querySelectorAll('.overview-card').forEach(function (card) {
+      card.addEventListener('click', function () {
+        selectedProject = card.dataset.project || 'nestview';
+        selectedView = 'project';
+        projectPage = 'overview';
+        localStorage.setItem('beacon_project', selectedProject);
+        localStorage.setItem('beacon_view', selectedView);
+        localStorage.setItem('beacon_project_page', projectPage);
+        loadData(token);
+      });
+    });
+    renderDataHealth(projects);
+  }
+
+  function renderDataHealth(projects) {
+    var now = Date.now();
+    var columns = '<div class="data-health-columns"><span>Project</span><span>New this week</span><span>Quiet 7–30d</span></div>';
+    el('data-health-list').innerHTML = projects.length ? columns + projects.map(function (project) {
+      var installs = (projectSummaries[project].installs || []).filter(function (install) {
+        return !excludeDev || !install.is_dev;
+      });
+      var newThisWeek = installs.filter(function (install) { return isNewToday(install.first_seen); }).length;
+      var quiet = installs.filter(function (install) {
+        var seen = new Date(install.last_seen).getTime();
+        return !isNaN(seen) && now - seen > RECENT_MS;
+      }).length;
+      return '<div class="data-health-row">' +
+        '<div class="data-health-project"><i class="ti ' + esc(projectIcon(project)) + ' project-nav-icon"></i>' + esc(projectLabel(project)) + '</div>' +
+        '<div><div class="data-health-label">New this week</div><div class="data-health-value' + (newThisWeek ? ' good' : '') + '">' + newThisWeek + '</div></div>' +
+        '<div><div class="data-health-label">Quiet 7–30d</div><div class="data-health-value' + (quiet ? ' quiet' : ' good') + '">' + quiet + '</div></div>' +
+      '</div>';
+    }).join('') : '<div class="data-health-row"><span class="empty-text">No projects have reported telemetry yet.</span></div>';
+  }
+
+  function renderProjectSettings() {
+    var settings = projectSettings[selectedProject] || {};
+    var selectedIcon = settings.icon || 'ti-chart-dots-3';
+    el('project-display-name').value = settings.display_name || selectedProject;
+    el('project-release-version').value = settings.release_version || '';
+    el('project-github-repo').value = settings.github_repo || '';
+    el('project-icon-picker').innerHTML = projectIconChoices.map(function (icon) {
+      return '<button class="icon-choice' + (icon === selectedIcon ? ' active' : '') + '" type="button" data-icon="' + icon + '" aria-label="Choose icon"><i class="ti ' + icon + '"></i></button>';
+    }).join('');
+
+    el('project-icon-picker').querySelectorAll('.icon-choice').forEach(function (button) {
+      button.addEventListener('click', function () {
+        selectedIcon = button.dataset.icon || 'ti-chart-dots-3';
+        el('project-icon-picker').querySelectorAll('.icon-choice').forEach(function (item) {
+          item.classList.toggle('active', item === button);
+        });
+      });
+    });
+
+    el('project-settings-form').onsubmit = function (event) {
+      event.preventDefault();
+      var saveButton = el('project-settings-save');
+      var status = el('project-settings-status');
+      var displayName = el('project-display-name').value.trim();
+      var releaseVersion = el('project-release-version').value.trim();
+      var githubRepo = el('project-github-repo').value.trim();
+      if (!displayName) {
+        status.textContent = 'Enter a friendly name.';
+        status.classList.add('error');
+        return;
+      }
+      saveButton.disabled = true;
+      status.textContent = 'Saving...';
+      status.classList.remove('error');
+      fetch('/project-settings', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project: selectedProject, display_name: displayName, icon: selectedIcon, release_version: releaseVersion, github_repo: githubRepo })
+      }).then(function (response) {
+        if (!response.ok) throw new Error('Unable to save settings');
+        return response.json();
+      }).then(function (saved) {
+        projectSettings[selectedProject] = { display_name: saved.display_name, icon: saved.icon, release_version: saved.release_version || null, github_repo: saved.github_repo || null };
+        renderProjectPicker(availableProjects);
+        render();
+        status.textContent = saved.github_repo ? (saved.github_release_found ? 'Saved and release checked.' : 'Saved. No published GitHub release found.') : 'Saved.';
+      }).catch(function () {
+        status.textContent = 'Could not save changes. Try again.';
+        status.classList.add('error');
+      }).finally(function () {
+        saveButton.disabled = false;
+      });
+    };
   }
 
   function renderFilterSelector() {
     var active = cardFilter || 'all';
     document.querySelectorAll('#filter-selector .fs-btn').forEach(function (btn) {
       btn.classList.toggle('fs-btn--active', btn.dataset.filterOpt === active);
-    });
-  }
-
-  function renderWindowPicker() {
-    el('window-btn-label').textContent = windowDays + 'd';
-    document.querySelectorAll('#window-menu .dropdown-item').forEach(function (item) {
-      item.classList.toggle('active', parseInt(item.dataset.value, 10) === windowDays);
     });
   }
 
@@ -1207,14 +1673,33 @@ function dashboardHtml(): string {
       else staleCount++;
       if (isNewToday(i.first_seen)) newTodayCount++;
     });
-    el('stat-active').textContent = (selectedSummary.active_recent ?? activeCount).toLocaleString();
-    el('stat-retained').textContent = (selectedSummary.active_30d ?? selectedSummary.active ?? counted.length).toLocaleString();
+    el('stat-active').textContent = activeCount.toLocaleString();
+    el('stat-retained').textContent = staleCount.toLocaleString();
     el('stat-total').textContent = (selectedSummary.total ?? counted.length).toLocaleString();
-    el('stat-new').textContent = (selectedSummary.new_today ?? newTodayCount).toLocaleString();
-    el('stat-stale').textContent = staleCount.toLocaleString();
+    el('stat-new').textContent = newTodayCount.toLocaleString();
     document.querySelectorAll('.stat-card').forEach(function (card) {
       card.classList.toggle('stat-card--active', card.dataset.filter === cardFilter);
     });
+  }
+
+  function renderProjectHealth() {
+    var source = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls.slice();
+    var active = source.filter(function (i) { return isActiveAt(i, Date.now()); });
+    var latest = source.slice().sort(function (a, b) {
+      return new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime();
+    })[0];
+    var latestCheckIn = latest && latest.last_seen ? relTime(latest.last_seen) : 'No check-ins';
+    var latestTitle = latest && latest.last_seen ? fmtDate(latest.last_seen) : '';
+    var releaseVersion = (projectSettings[selectedProject] || {}).release_version || '';
+    var behind = releaseVersion ? active.filter(function (install) {
+      return isBehindRelease(install.version, releaseVersion);
+    }).length : null;
+
+    el('project-health-note').textContent = source.length ? (excludeDev ? 'Production telemetry' : 'All telemetry') : 'No telemetry yet';
+    el('project-health-grid').innerHTML =
+      '<div class="health-item"><div class="health-value health-value--good" title="' + esc(latestTitle) + '">' + esc(latestCheckIn) + '</div><div class="health-label">Latest check-in</div></div>' +
+      '<div class="health-item"><div class="health-value" title="Current release version">' + esc(releaseVersion || 'Not set') + '</div><div class="health-label">Current release</div></div>' +
+      '<div class="health-item"><div class="health-value' + (behind ? ' health-value--behind' : '') + '">' + (behind === null ? '—' : behind.toLocaleString()) + '</div><div class="health-label">Behind this week' + (behind === null ? ' (set release)' : '') + '</div></div>';
   }
 
   function renderChart() {
@@ -1346,7 +1831,6 @@ function dashboardHtml(): string {
     renderDist('breakdown-version', buildDist('version'), total, true);
     renderDist('breakdown-arch', buildDist('arch'), total, false);
     renderDist('breakdown-os', buildDist('os'), total, false);
-    renderDist('breakdown-channel', buildDist('channel'), total, false);
     renderProjectStats(active);
   }
 
@@ -1354,8 +1838,8 @@ function dashboardHtml(): string {
     var profile = projectProfile();
     var card = el('breakdown-project-stats-card');
     var container = el('breakdown-project-stats');
-    card.hidden = !profile;
-    if (!profile) {
+    card.hidden = !profile || !profile.breakdownFields;
+    if (!profile || !profile.breakdownFields) {
       container.innerHTML = '';
       return;
     }
@@ -1368,12 +1852,9 @@ function dashboardHtml(): string {
         .filter(function (v) { return typeof v === 'number' && isFinite(v); });
       if (values.length === 0) return null;
       var avg = Math.round(values.reduce(function (sum, v) { return sum + v; }, 0) / values.length);
-      return '<div class="breakdown-row">' +
-        '<span class="breakdown-label" title="' + esc(field[1]) + '">' + esc(field[1]) + '</span>' +
-        '<div class="breakdown-bar-track"><div class="breakdown-bar" style="width:100%"></div></div>' +
-        '<span class="breakdown-value" title="Average">' + avg.toLocaleString() + '</span></div>';
+      return '<span class="running-tag"><span class="running-tag-label">' + esc(field[1]) + '</span><span class="running-tag-count">' + avg.toLocaleString() + '</span></span>';
     }).filter(Boolean);
-    container.innerHTML = rows.length ? rows.join('') : '<span class="empty-text">No data</span>';
+    container.innerHTML = rows.length ? '<div class="running-tags">' + rows.join('') + '</div>' : '<span class="empty-text">No data</span>';
   }
 
   function renderDist(containerId, dist, total, sortByVersion) {
@@ -1382,24 +1863,20 @@ function dashboardHtml(): string {
     if (sortByVersion) entries.sort(function (a, b) { return semverSort(a[0], b[0]); });
     else entries.sort(function (a, b) { return b[1] - a[1]; });
     if (entries.length === 0) { container.innerHTML = '<span class="empty-text">No data</span>'; return; }
-    container.innerHTML = entries.map(function (pair) {
-      var pct = total > 0 ? Math.round(pair[1] / total * 100) : 0;
-      return '<div class="breakdown-row">' +
-        '<span class="breakdown-label" title="' + esc(pair[0]) + '">' + esc(pair[0]) + '</span>' +
-        '<div class="breakdown-bar-track"><div class="breakdown-bar" style="width:' + pct + '%"></div></div>' +
-        '<span class="breakdown-pct">' + pct + '%</span></div>';
-    }).join('');
+    container.innerHTML = '<div class="running-tags">' + entries.map(function (pair) {
+      return '<span class="running-tag" title="' + esc(pair[0]) + '"><span class="running-tag-label">' + esc(pair[0]) + '</span><span class="running-tag-count">' + pair[1] + '</span></span>';
+    }).join('') + '</div>';
   }
 
   function renderInstallDetails() {
     var now = Date.now();
     var source = excludeDev ? allInstalls.filter(function (i) { return !i.is_dev; }) : allInstalls;
     var base;
-    if (cardFilter === 'active') {
+    if (cardFilter === 'recent') {
       base = source.filter(function (i) { return isActiveAt(i, now); });
-    } else if (cardFilter === 'stale') {
+    } else if (cardFilter === 'inactive') {
       base = source.filter(function (i) { return !isActiveAt(i, now); });
-    } else if (cardFilter === 'new_today') {
+    } else if (cardFilter === 'new_week') {
       base = source.filter(function (i) { return isNewToday(i.first_seen); });
     } else {
       base = source.slice();
@@ -1485,6 +1962,18 @@ function dashboardHtml(): string {
     var tbody = el('install-tbody');
     var paginationBar = el('pagination-bar');
     var total = installs.length;
+    el('install-list-header').querySelectorAll('[data-sort]').forEach(function (button) {
+      var key = button.dataset.sort;
+      var label = key === 'last_seen' ? 'Last seen' : 'Version';
+      button.textContent = label + (sortCol === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+      button.classList.toggle('active', sortCol === key);
+      button.onclick = function () {
+        if (sortCol === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        else { sortCol = key; sortDir = key === 'last_seen' ? 'desc' : 'asc'; }
+        currentPage = 1;
+        renderInstallTable(currentFiltered);
+      };
+    });
 
     var cols = [
       { key: null, label: '', cls: 'col-chevron', sortable: false },
@@ -1567,18 +2056,19 @@ function dashboardHtml(): string {
 
     tbody.innerHTML = pageRows.map(function (i) {
       var osLabel = (i.os != null && i.os !== '') ? i.os : '-';
-      var chanLabel = (i.channel != null && i.channel !== '') ? i.channel : '-';
       var isExpanded = expandedInstallId === i.install_id;
       var firstSeenRel = i.first_seen ? relTime(i.first_seen) : '-';
       var lastSeenRel = i.last_seen ? relTime(i.last_seen) : '-';
 
       var devBadge = (!excludeDev && i.is_dev) ? '<span class="dev-badge">dev</span>' : '';
+      var releaseVersion = (projectSettings[selectedProject] || {}).release_version || '';
+      var behindBadge = releaseVersion && isActiveAt(i, Date.now()) && isBehindRelease(i.version, releaseVersion) ? '<span class="behind-badge">behind</span>' : '';
       var dataRow = '<tr class="install-data-row' + (isExpanded ? ' row-expanded' : '') + '" data-id="' + esc(i.install_id || '') + '">' +
         '<td class="col-chevron">' + (isExpanded ? '▼' : '▶') + '</td>' +
         '<td class="col-installid install-id-cell">' + esc(i.install_id || 'unknown') + devBadge + '</td>' +
         '<td class="col-os">' + esc(osLabel) + '</td>' +
         '<td class="col-arch">' + esc(i.arch || '-') + '</td>' +
-        '<td class="col-version">' + esc(i.version || '-') + '</td>' +
+        '<td class="col-version">' + esc(i.version || '-') + behindBadge + '</td>' +
         '<td class="col-firstseen">' + esc(firstSeenRel) + '</td>' +
         '<td class="col-lastseen">' + esc(lastSeenRel) + '</td>' +
         '</tr>';
@@ -1593,15 +2083,13 @@ function dashboardHtml(): string {
             '</span></div>';
         }).join('') : '';
         detailRow = '<tr class="install-detail-row"><td colspan="7"><div class="install-detail-panel"><div class="detail-grid">' +
-          '<div class="detail-field"><span class="detail-key">install_id</span><span class="detail-val detail-mono">' + esc(i.install_id || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">arch</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">os</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">channel</span><span class="detail-val">' + esc(chanLabel) + '</span></div>' +
+          '<div class="detail-field detail-field--wide"><span class="detail-key">Install ID</span><span class="detail-val detail-mono">' + esc(i.install_id || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Version</span><span class="detail-val">' + esc(i.version || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Architecture</span><span class="detail-val">' + esc(i.arch || '') + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Operating system</span><span class="detail-val">' + esc(osLabel) + '</span></div>' +
           projectDetailFields +
-          '<div class="detail-field"><span class="detail-key">project</span><span class="detail-val">' + esc(i.project || '') + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">first_seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
-          '<div class="detail-field"><span class="detail-key">last_seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">First seen</span><span class="detail-val">' + esc(fmtDate(i.first_seen)) + '</span></div>' +
+          '<div class="detail-field"><span class="detail-key">Last seen</span><span class="detail-val">' + esc(fmtDate(i.last_seen)) + '</span></div>' +
           '</div></div></td></tr>';
       }
 
@@ -1656,31 +2144,6 @@ function dashboardHtml(): string {
     if (!e.target.closest('.dropdown-wrap')) closeDropdowns();
   });
 
-  el('window-btn').addEventListener('click', function (e) {
-    e.stopPropagation();
-    var menu = el('window-menu');
-    var wasOpen = !menu.classList.contains('hidden');
-    closeDropdowns();
-    if (!wasOpen) menu.classList.remove('hidden');
-  });
-
-  el('project-btn').addEventListener('click', function (e) {
-    e.stopPropagation();
-    var menu = el('project-menu');
-    var wasOpen = !menu.classList.contains('hidden');
-    closeDropdowns();
-    if (!wasOpen) menu.classList.remove('hidden');
-  });
-
-  el('window-menu').querySelectorAll('.dropdown-item').forEach(function (item) {
-    item.addEventListener('click', function () {
-      windowDays = parseInt(item.dataset.value, 10);
-      localStorage.setItem('beacon_window_days', String(windowDays));
-      closeDropdowns();
-      render();
-    });
-  });
-
   ['filter-version', 'filter-arch', 'filter-os', 'filter-channel', 'filter-perpage'].forEach(function (id) {
     el(id).addEventListener('click', function (e) {
       e.stopPropagation();
@@ -1722,6 +2185,11 @@ function dashboardHtml(): string {
     card.addEventListener('click', function () {
       cardFilter = card.dataset.filter;
       currentPage = 1;
+      projectPage = 'installs';
+      localStorage.setItem('beacon_project_page', projectPage);
+      document.querySelectorAll('.project-subnav-item').forEach(function (item) {
+        item.classList.toggle('active', item.dataset.page === 'installs');
+      });
       setTimeout(function () {
         el('details-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 50);
