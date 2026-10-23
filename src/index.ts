@@ -1072,12 +1072,8 @@ function dashboardHtml(): string {
           <div id="breakdown-version"></div>
         </div>
         <div class="breakdown-card">
-          <div class="breakdown-title">Architecture</div>
-          <div id="breakdown-arch"></div>
-        </div>
-        <div class="breakdown-card">
-          <div class="breakdown-title">OS</div>
-          <div id="breakdown-os"></div>
+          <div class="breakdown-title">OS / Architecture</div>
+          <div id="breakdown-platform"></div>
         </div>
         <div class="breakdown-card" id="breakdown-project-stats-card" hidden>
           <div class="breakdown-title">Library Size</div>
@@ -1863,18 +1859,19 @@ function dashboardHtml(): string {
     var active = source.filter(function (i) { return isActiveAt(i, now); });
     var total = active.length;
 
-    function buildDist(field) {
+    function buildDist(fields) {
       var dist = {};
       active.forEach(function (i) {
-        var v = (i[field] != null && i[field] !== '') ? i[field] : '-';
+        var v = fields.map(function (field) {
+          return (i[field] != null && i[field] !== '') ? i[field] : '-';
+        }).join(' / ');
         dist[v] = (dist[v] || 0) + 1;
       });
       return dist;
     }
 
-    renderDist('breakdown-version', buildDist('version'), total, true);
-    renderDist('breakdown-arch', buildDist('arch'), total, false);
-    renderDist('breakdown-os', buildDist('os'), total, false);
+    renderDist('breakdown-version', buildDist(['version']), total, true);
+    renderDist('breakdown-platform', buildDist(['os', 'arch']), total, false);
     renderProjectStats(active);
   }
 
