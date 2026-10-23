@@ -174,6 +174,20 @@ Beacon intentionally does not authenticate `/ping`, so clients can send telemetr
 
 Client apps should never fail startup, setup, or core workflows if Beacon is unavailable. Use a short timeout, ignore network failures, and try again on the next scheduled interval.
 
+### Cratekeep
+
+Cratekeep uses the project slug `cratekeep` and the existing `artist_count`,
+`album_count`, and `song_count` fields for aggregate managed-library sizes.
+The dashboard discovers Cratekeep after its first accepted ping. No project
+registration or additional database migration is needed beyond the existing schema
+and migrations.
+
+The Cratekeep dashboard shows average library sizes across installs reporting in
+the last seven days, respecting the development-install filter. Expand an install
+row to see its individual artist, album, and song counts. Missing counts are shown
+as `-` in install details and excluded from averages; reported zeros are included.
+These are current library snapshots, not import counts or library-growth history.
+
 ### Nestview Client Example
 
 Nestview's client implementation lives in `backend/services/analytics.py` in the Nestview repo. It shows the expected pattern:
