@@ -920,7 +920,9 @@ function dashboardHtml(): string {
     .install-table td { padding: 0; border: 0; min-width: 0; font-size: 0.82rem; color: #cbd5e1; }
     .install-table td.col-chevron { grid-area: chevron; color: #64748b; font-size: 0.65rem; }
     .install-table td.col-installid { grid-area: install; }
-    .install-table td.col-version { grid-area: version; color: #67e8f9; text-align: right; }
+    .install-table td.col-version { grid-area: version; display: flex; justify-content: flex-end; min-width: 0; color: #67e8f9; text-align: right; }
+    .install-version { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .col-version .behind-badge { flex-shrink: 0; }
     .install-table td.col-lastseen { grid-area: seen; color: #94a3b8; text-align: right; }
     .install-table td.col-os, .install-table td.col-arch, .install-table td.col-firstseen { display: none; }
     .install-table tbody tr.install-detail-row { display: block; }
@@ -2101,6 +2103,9 @@ function dashboardHtml(): string {
       var firstSeenRel = i.first_seen ? relTime(i.first_seen) : '-';
       var lastSeenRel = i.last_seen ? relTime(i.last_seen) : '-';
 
+      var version = i.version || '-';
+      var versionLabel = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(version) ? version.slice(0, 7) : version;
+
       var devBadge = (!excludeDev && i.is_dev) ? '<span class="dev-badge">dev</span>' : '';
       var activity = installActivity(i);
       var activityBadge = activity ? '<span class="activity-badge ' + activity + '">' + (activity === 'new' ? 'new this week' : 'quiet') + '</span>' : '';
@@ -2111,7 +2116,7 @@ function dashboardHtml(): string {
         '<td class="col-installid install-id-cell">' + esc(i.install_id || 'unknown') + devBadge + activityBadge + '</td>' +
         '<td class="col-os">' + esc(osLabel) + '</td>' +
         '<td class="col-arch">' + esc(i.arch || '-') + '</td>' +
-        '<td class="col-version">' + esc(i.version || '-') + behindBadge + '</td>' +
+        '<td class="col-version"><span class="install-version" title="' + esc(version) + '">' + esc(versionLabel) + '</span>' + behindBadge + '</td>' +
         '<td class="col-firstseen">' + esc(firstSeenRel) + '</td>' +
         '<td class="col-lastseen">' + esc(lastSeenRel) + '</td>' +
         '</tr>';
