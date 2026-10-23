@@ -1228,6 +1228,19 @@ function dashboardHtml(): string {
         ['container_count', 'Containers']
       ]
     },
+    cratekeep: {
+      breakdownTitle: 'Average Library Size',
+      breakdownFields: [
+        ['artist_count', 'Artists'],
+        ['album_count', 'Albums'],
+        ['song_count', 'Songs']
+      ],
+      detailFields: [
+        ['artist_count', 'Artists'],
+        ['album_count', 'Albums'],
+        ['song_count', 'Songs']
+      ]
+    },
     prism: {
       breakdownTitle: 'Library Size',
       breakdownFields: [
